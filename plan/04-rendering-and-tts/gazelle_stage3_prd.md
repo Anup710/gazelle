@@ -160,9 +160,11 @@ If TTS generation fails:
   "citations": [
     {
       "chunk_id": "string",
+      "text": "string",
       "timestamp_start": 0,
       "timestamp_end": 0,
-      "relevance_score": 0.0
+      "relevance_score": 0.0,
+      "speaker_set": ["string"]
     }
   ],
   "conversation_summary": "string or null",
@@ -180,6 +182,7 @@ If TTS generation fails:
 
 - `conversation_summary` is inherited from the Stage 2 chat continuity contract. It is included only on compaction turns (every 4th turn), `null` otherwise. The client stores and sends this with subsequent requests. See Stage 2 PRD/TRD for full context.
 - `query.language` and `response.language` reflect the detected language of the user query. Valid values: `"english"`, `"hindi"`, `"hinglish"`.
+- `citations[].text` is the verbatim source chunk used for generation, returned so the frontend can show exact transcript content in the citation popover (trust + verifiability). Already in memory at response time — no extra retrieval cost.
 
 ---
 
