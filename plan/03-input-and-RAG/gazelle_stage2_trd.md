@@ -528,7 +528,9 @@ Notes:
 
 ---
 
-# Response
+# Response (Internal Pipeline Output)
+
+> **Note:** This is the internal response shape produced by the RAG pipeline. The final client-facing response schema — which extends this with citation metadata, TTS availability, and additional structure — is defined in the **Stage 3 PRD** (`plan/04-rendering-and-tts/gazelle_stage3_prd.md`).
 
 ```json
 {
