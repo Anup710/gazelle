@@ -38,11 +38,13 @@ User Query
 
 ## Existing Endpoint
 
+> Defined in Stage 2 TRD (`plan/03-input-and-RAG/gazelle_stage2_trd.md`). Stage 3 extends the response schema; it does not create a separate route.
+
 ```text
-POST /query
+POST /rag/query
 ```
 
-This endpoint now returns a structured response schema.
+This endpoint now returns a structured response schema (extended from Stage 2's internal output with citation metadata, relevance scores, and TTS availability).
 
 ---
 
@@ -70,6 +72,7 @@ Required fields:
 | timestamp_start | Start timestamp in source media |
 | timestamp_end | End timestamp in source media |
 | relevance_score | Retrieval similarity score |
+| speaker_set | Speakers in the cited chunk (array, may contain one element) |
 
 ---
 
@@ -136,7 +139,7 @@ Expected latency: **1–3 seconds** for a typical ~200 word tutoring response. A
 ## Query Endpoint
 
 ```python
-@app.post("/query")
+@app.post("/rag/query")
 async def query():
     return structured_response
 ```
