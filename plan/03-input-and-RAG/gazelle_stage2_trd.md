@@ -25,7 +25,7 @@ Inherited from earlier stages:
 | Vector DB | Qdrant |
 | Embeddings | OpenAI text-embedding-3-small |
 | STT (video + voice queries) | Groq Whisper |
-| Generation LLM | OpenAI GPT-4o or similar |
+| Generation LLM | OpenAI GPT-4o-mini |
 | Transcript Source | Structured transcript JSON |
 
 Design choice: All inference (embeddings, augmentation, generation) stays within the OpenAI ecosystem for consistency. Groq Whisper is the only external provider, used exclusively for STT.
@@ -343,7 +343,7 @@ Each chunk should return:
 - text
 - timestamps
 - similarity score
-- speaker (optional)
+- speaker_set
 - transcript position
 
 Recommended payload:
@@ -351,10 +351,10 @@ Recommended payload:
 {
   "chunk_id": "...",
   "text": "...",
-  "start_time": 120.5,
-  "end_time": 142.9,
-  "score": 0.83,
-  "speaker": "Instructor"
+  "timestamp_start": 120.5,
+  "timestamp_end": 142.9,
+  "relevance_score": 0.83,
+  "speaker_set": ["Instructor"]
 }
 ```
 
@@ -451,7 +451,7 @@ If the information is unavailable, explicitly state that.
 # Generation LLM
 
 ## Model
-OpenAI GPT-4o or similar
+OpenAI GPT-4o-mini
 
 ## Reasoning
 - stays within OpenAI ecosystem (same provider as embeddings)
@@ -498,9 +498,38 @@ Acceptable for V1 educational interaction.
 
 ---
 
-# API Shape (Recommended)
+# API Shape
 
-## Endpoint
+## Voice Input Endpoint
+
+```http
+POST /stt
+```
+
+### Purpose
+Transcribe voice queries to text using Groq Whisper (same provider as Stage 0 video transcription).
+
+### Request
+Multipart form data with audio file.
+
+```text
+Content-Type: multipart/form-data
+Field: audio (file)
+```
+
+### Response
+
+```json
+{
+  "text": "What is backpropagation?"
+}
+```
+
+The client receives the transcribed text and then sends it to `POST /rag/query` as a normal text query. Voice and text queries share the same downstream pipeline.
+
+---
+
+## Query Endpoint
 
 ```http
 POST /rag/query
@@ -530,18 +559,21 @@ Notes:
 
 # Response (Internal Pipeline Output)
 
-> **Note:** This is the internal response shape produced by the RAG pipeline. The final client-facing response schema — which extends this with citation metadata, TTS availability, and additional structure — is defined in the **Stage 3 PRD** (`plan/04-rendering-and-tts/gazelle_stage3_prd.md`).
+> **Note:** Field names here match the Stage 3 canonical response schema (`plan/04-rendering-and-tts/gazelle_stage3_prd.md`). Stage 3 wraps this output with additional fields (`response_id`, `query`, `tts`, `metadata`) — but the core fields below use identical names so no transformation layer is needed.
 
 ```json
 {
-  "response_text": "...",
-  "language": "english",
+  "response": {
+    "text": "...",
+    "language": "english"
+  },
   "conversation_summary": "...",
-  "sources": [
+  "citations": [
     {
       "chunk_id": "...",
-      "start_time": 120.5,
-      "end_time": 142.9
+      "timestamp_start": 120.5,
+      "timestamp_end": 142.9,
+      "relevance_score": 0.83
     }
   ]
 }
@@ -550,6 +582,32 @@ Notes:
 Notes:
 - `conversation_summary` is included only on compaction turns (every 4th turn), null otherwise
 - Client replaces its stored summary when a new one is returned
+- `relevance_score` is the similarity score from the retrieval layer (see Retrieval Metadata section above)
+
+---
+
+# Error Response Schema
+
+All API endpoints use a consistent error shape:
+
+```json
+{
+  "error": {
+    "code": "insufficient_context",
+    "message": "I couldn't find relevant information in the uploaded content."
+  }
+}
+```
+
+| Code | HTTP Status | When |
+|---|---|---|
+| `invalid_session` | 404 | `session_id` not found or not ready |
+| `insufficient_context` | 200 | No chunk meets similarity threshold — returned as a normal response with refusal text |
+| `stt_failed` | 500 | Voice transcription failed |
+| `generation_failed` | 500 | LLM generation failed |
+| `invalid_input` | 400 | Missing or malformed request fields |
+
+Note: `insufficient_context` returns HTTP 200 because the pipeline executed correctly — it just didn't find enough evidence. The refusal is part of normal behavior, not an error.
 
 ---
 
