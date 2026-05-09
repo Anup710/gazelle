@@ -1,0 +1,1 @@
+The repository contains all the code for gazelle, any app, our tutor, enabling you to understand videos better. 
