@@ -69,6 +69,7 @@ Required fields:
 | Field | Description |
 |---|---|
 | chunk_id | Original retrieved chunk identifier |
+| text | Verbatim source chunk text (shown in citation popover) |
 | timestamp_start | Start timestamp in source media |
 | timestamp_end | End timestamp in source media |
 | relevance_score | Retrieval similarity score |

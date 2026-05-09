@@ -571,9 +571,11 @@ Notes:
   "citations": [
     {
       "chunk_id": "...",
+      "text": "...",
       "timestamp_start": 120.5,
       "timestamp_end": 142.9,
-      "relevance_score": 0.83
+      "relevance_score": 0.83,
+      "speaker_set": ["Instructor"]
     }
   ]
 }
@@ -583,6 +585,7 @@ Notes:
 - `conversation_summary` is included only on compaction turns (every 4th turn), null otherwise
 - Client replaces its stored summary when a new one is returned
 - `relevance_score` is the similarity score from the retrieval layer (see Retrieval Metadata section above)
+- `text` is the verbatim retrieved chunk (already loaded in memory for prompt construction); preserved through serialization so the frontend can display exact source text in the citation popover
 
 ---
 
