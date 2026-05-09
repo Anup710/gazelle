@@ -1,6 +1,12 @@
 # Transcript-Grounded Chat System — TRD
 
-## 1. High-Level Architecture
+## 1. Trigger & Relationship to Stage 0
+
+Stage 1 is **automatically triggered** when Stage 0 transcription completes successfully. There is no separate API call — the backend chains Stage 1 immediately after Stage 0 within the same background job. The client polls a single `job_id` and sees the status progress through `transcribing → validating → embedding → ready` (see Stage 0 TRD for the full status enum).
+
+---
+
+## 2. High-Level Architecture
 
 ```text
                 INGESTION PIPELINE
@@ -43,7 +49,7 @@
 
 ---
 
-## 2. Input Format
+## 3. Input Format
 
 Expected transcript structure (matches Stage 0 output):
 
@@ -70,7 +76,7 @@ Notes:
 
 ---
 
-## 3. Normalization Layer
+## 4. Normalization Layer
 
 Allowed preprocessing:
 - whitespace cleanup
@@ -86,7 +92,7 @@ Disallowed:
 
 ---
 
-## 4. Chunking Strategy
+## 5. Chunking Strategy
 
 ### Strategy
 
@@ -121,7 +127,7 @@ Must preserve:
 
 ---
 
-## 5. Chunk Object Shape
+## 6. Chunk Object Shape
 
 ```json
 {
@@ -145,7 +151,7 @@ Must preserve:
 
 ---
 
-## 6. Embedding Layer
+## 7. Embedding Layer
 
 ### Embedding Model
 
@@ -163,7 +169,7 @@ Reason:
 
 ---
 
-## 7. Vector Database
+## 8. Vector Database
 
 ### Selected DB
 
@@ -188,7 +194,7 @@ transcript_chunks
 
 ---
 
-## 8. Retrieval Compatibility Decisions
+## 9. Retrieval Compatibility Decisions
 
 ### Session Isolation
 
@@ -215,7 +221,7 @@ Purpose:
 
 ---
 
-## 9. Deferred Features (Not in V1)
+## 10. Deferred Features (Not in V1)
 
 Explicitly excluded:
 - reranking
@@ -230,7 +236,7 @@ Explicitly excluded:
 
 ---
 
-## 10. Recommended Backend Structure
+## 11. Recommended Backend Structure
 
 ```text
 backend/

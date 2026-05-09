@@ -190,21 +190,40 @@ Educational / Non-Educational
 
 ## Processing Model
 
-All transcription jobs should be asynchronous.
+All processing is asynchronous and spans both Stage 0 (transcription) and Stage 1 (chunking + embedding) as a single continuous pipeline.
 
 ### Flow
 
 ```text
 Submit Job
     ↓
-Return Job ID
+Return Job ID (session_id)
     ↓
-Background Processing
+Stage 0: Transcription
     ↓
-Status Polling
+Stage 1: Chunking + Embedding (auto-triggered on transcription completion)
     ↓
-Final Transcript Response
+Ready for Queries
 ```
+
+The client polls a single `job_id`. There is no separate API call to trigger Stage 1 — it begins automatically when transcription completes. See Stage 1 TRD (`plan/02-kb-embedding/transcript_grounded_chat_trd.md`) for chunking and embedding details.
+
+### Unified Job Status Enum
+
+```python
+status: "pending" | "transcribing" | "validating" | "embedding" | "ready" | "failed"
+```
+
+| Status | Meaning |
+|---|---|
+| pending | Job created, processing not yet started |
+| transcribing | Audio/video being transcribed (Stage 0) |
+| validating | Educational content validation in progress |
+| embedding | Chunking + embedding in progress (Stage 1) |
+| ready | Knowledge base built, ready for queries |
+| failed | Processing failed at any stage |
+
+The frontend uses this enum to show progress indicators (see `plan/05-ui/requirements.md`).
 
 ---
 
@@ -235,8 +254,8 @@ Do NOT persist uploaded media.
 ## Jobs Table
 
 Suggested fields:
-- id
-- status
+- id (serves as both `job_id` and `session_id`)
+- status (`pending | transcribing | validating | embedding | ready | failed`)
 - source_type
 - source
 - created_at
@@ -246,11 +265,154 @@ Suggested fields:
 - duration_seconds
 - used_native_captions
 - transcript_json
+- full_text
 - validation_result
+- error_message (null unless status = failed)
 
 ---
 
-# 11. Suggested Transcript JSON Schema
+# 11. API Endpoints
+
+Three separate ingest endpoints — one per input type. This avoids mixing `multipart/form-data` (file upload) with `application/json` (URL/text) in a single handler, keeps each route focused, and makes the API self-documenting.
+
+---
+
+## `POST /ingest/youtube`
+
+Submit a YouTube URL for processing.
+
+### Request
+
+```json
+{
+  "url": "https://www.youtube.com/watch?v=..."
+}
+```
+
+### Response (202 Accepted)
+
+```json
+{
+  "job_id": "uuid",
+  "status": "pending"
+}
+```
+
+---
+
+## `POST /ingest/upload`
+
+Upload a local video file.
+
+### Request
+
+```text
+Content-Type: multipart/form-data
+Field: file (MP4, MOV, AVI, MKV — max 500 MB)
+```
+
+### Response (202 Accepted)
+
+```json
+{
+  "job_id": "uuid",
+  "status": "pending"
+}
+```
+
+---
+
+## `POST /ingest/text`
+
+Submit a raw transcript paste.
+
+### Request
+
+```json
+{
+  "text": "Today we will discuss matrices..."
+}
+```
+
+### Response (202 Accepted)
+
+```json
+{
+  "job_id": "uuid",
+  "status": "pending"
+}
+```
+
+---
+
+## `GET /job/{job_id}`
+
+Poll job status. The client calls this on an interval until status = `ready` or `failed`.
+
+### Response
+
+```json
+{
+  "job_id": "uuid",
+  "status": "embedding",
+  "source_type": "youtube",
+  "title": "Intro to Linear Algebra",
+  "created_at": "ISO timestamp"
+}
+```
+
+When status = `ready`, the full transcript metadata is available:
+
+```json
+{
+  "job_id": "uuid",
+  "status": "ready",
+  "source_type": "youtube",
+  "source": "https://youtube.com/...",
+  "title": "Intro to Linear Algebra",
+  "detected_language": "en",
+  "duration_seconds": 5421,
+  "created_at": "ISO timestamp"
+}
+```
+
+When status = `failed`:
+
+```json
+{
+  "job_id": "uuid",
+  "status": "failed",
+  "error_message": "ASR transcription failed"
+}
+```
+
+---
+
+## `GET /sessions`
+
+List all sessions (jobs) for the session sidebar.
+
+### Response
+
+```json
+{
+  "sessions": [
+    {
+      "job_id": "uuid",
+      "title": "Intro to Linear Algebra",
+      "source_type": "youtube",
+      "status": "ready",
+      "created_at": "ISO timestamp"
+    }
+  ]
+}
+```
+
+This endpoint queries the `jobs` table. It returns session metadata only — no conversation history. Conversation history is client-managed in V1 (see Stage 2 TRD). In future versions, a separate conversations table in Supabase will store chat history and this endpoint (or a dedicated `/sessions/{id}/history` endpoint) will return it.
+
+---
+
+# 12. Suggested Transcript JSON Schema
 
 ```json
 {
@@ -279,7 +441,7 @@ Suggested fields:
 
 ---
 
-# 12. Error Handling
+# 13. Error Handling
 
 ## Expected Errors
 
@@ -294,7 +456,7 @@ Suggested fields:
 
 ---
 
-# 13. Deployment Notes
+# 14. Deployment Notes
 
 ## Recommended Hosting
 
@@ -307,7 +469,7 @@ Suggested fields:
 
 ---
 
-# 14. Explicit Non-Goals
+# 15. Explicit Non-Goals
 
 The following are intentionally excluded from V1:
 
@@ -326,7 +488,7 @@ The following are intentionally excluded from V1:
 
 ---
 
-# 15. Future Extensions (Out of Scope)
+# 16. Future Extensions (Out of Scope)
 
 Potential future additions:
 - additional Indic languages,
