@@ -5,8 +5,8 @@ import { ragQuery } from "./api/rag.js";
 import { listSessions } from "./api/sessions.js";
 import { ChatView } from "./components/ChatView.jsx";
 import { CitationPopover } from "./components/CitationPopover.jsx";
-import { Icon } from "./components/Icon.jsx";
 import { InputView } from "./components/InputView.jsx";
+import { Landing } from "./components/Landing.jsx";
 import { ProcessingView } from "./components/ProcessingView.jsx";
 import { Sidebar } from "./components/Sidebar.jsx";
 import { useJobPolling } from "./hooks/useJobPolling.js";
@@ -26,6 +26,7 @@ export default function App() {
   const [sessions, setSessions] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [view, setView] = useState("empty"); // "empty" | "input" | "processing" | "chat"
+  const [inputInitialMode, setInputInitialMode] = useState("youtube");
   const [pendingJob, setPendingJob] = useState(null);
   const [messagesBySession, setMessagesBySession] = useState({});
   const [historyBySession, setHistoryBySession] = useState({});
@@ -92,8 +93,17 @@ export default function App() {
   });
 
   const handleNew = () => {
-    setView("input");
+    setView("empty");
     setActiveId(null);
+  };
+
+  const handleSwitchToMode = (mode) => {
+    setInputInitialMode(mode);
+    setView("input");
+  };
+
+  const handleYouTubeFromLanding = ({ url, title }) => {
+    handleSubmitInput({ source: "youtube", payload: { url }, title });
   };
 
   const handleSelect = (id) => {
@@ -238,11 +248,7 @@ export default function App() {
     setThinkingFor(null);
   };
 
-  const showEmpty = view === "empty" || (view === "chat" && !activeSession);
-  const emptyHeadline =
-    sessions.length === 0
-      ? "Upload a video or paste a transcript to get started"
-      : "Pick a session, or start a new one";
+  const showLanding = view === "empty" || (view === "chat" && !activeSession);
 
   return (
     <>
@@ -278,7 +284,9 @@ export default function App() {
             )}
           </div>
 
-          {view === "input" && <InputView onSubmit={handleSubmitInput} />}
+          {view === "input" && (
+            <InputView onSubmit={handleSubmitInput} initialMode={inputInitialMode} />
+          )}
           {view === "processing" && pendingJob && (
             <ProcessingView session={pendingJob} onAbandon={handleAbandonFailure} />
           )}
@@ -292,17 +300,13 @@ export default function App() {
               notify={notify}
             />
           )}
-          {showEmpty && (
-            <div className="center">
-              <div className="empty-thread">
-                <div className="et-mark">+</div>
-                <h3 className="serif">{emptyHeadline}</h3>
-                <p>Drop a YouTube link, upload a video, or paste a transcript to get started.</p>
-                <button className="btn btn-primary" onClick={handleNew}>
-                  New session <Icon.Plus />
-                </button>
-              </div>
-            </div>
+          {showLanding && (
+            <Landing
+              sessions={sessions}
+              onSelect={handleSelect}
+              onYouTubeSubmit={handleYouTubeFromLanding}
+              onSwitchToMode={handleSwitchToMode}
+            />
           )}
         </main>
       </div>
