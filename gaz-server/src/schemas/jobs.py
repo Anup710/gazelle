@@ -27,6 +27,7 @@ class JobView(BaseModel):
     duration_seconds: Optional[int] = None
     failure_reason: Optional[FailureReason] = None
     error_message: Optional[str] = None
+    archived: bool = False
     created_at: str
 
 
@@ -37,8 +38,13 @@ class SessionRow(BaseModel):
     title: Optional[str]
     source_type: SourceType
     status: JobStatus
+    archived: bool = False
     created_at: str
 
 
 class SessionsResponse(BaseModel):
     sessions: list[SessionRow]
+
+
+class ArchiveRequest(BaseModel):
+    archived: bool

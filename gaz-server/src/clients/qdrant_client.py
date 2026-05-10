@@ -50,3 +50,30 @@ def ensure_collection() -> None:
     except Exception as e:
         # Already exists is the common case — Qdrant raises rather than no-op.
         log.info("qdrant.payload_index_skip", extra={"reason": str(e)[:120]})
+
+
+def delete_by_session(session_id: str) -> None:
+    """Idempotent delete of all points for a session. Safe to call even when no points exist
+    (e.g. session failed before embedding). Errors are logged, not raised."""
+    client = get()
+    name = settings().QDRANT_COLLECTION
+    try:
+        client.delete(
+            collection_name=name,
+            points_selector=qm.FilterSelector(
+                filter=qm.Filter(
+                    must=[
+                        qm.FieldCondition(
+                            key="session_id",
+                            match=qm.MatchValue(value=session_id),
+                        )
+                    ]
+                )
+            ),
+        )
+        log.info("qdrant.deleted_session", extra={"session_id": session_id})
+    except Exception as e:
+        log.warning(
+            "qdrant.delete_failed",
+            extra={"session_id": session_id, "error": str(e)[:200]},
+        )

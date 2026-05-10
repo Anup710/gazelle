@@ -16,6 +16,7 @@ async def list_sessions() -> SessionsResponse:
                 title=r.get("title"),
                 source_type=r["source_type"],
                 status=r["status"],
+                archived=bool(r.get("archived", False)),
                 created_at=str(r["created_at"]),
             )
             for r in rows

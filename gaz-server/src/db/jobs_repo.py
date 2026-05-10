@@ -42,11 +42,30 @@ def list_sessions() -> list[dict]:
     res = (
         supabase_client.get()
         .table(TABLE)
-        .select("id,title,source_type,status,created_at")
+        .select("id,title,source_type,status,archived,created_at")
         .order("created_at", desc=True)
         .execute()
     )
     return res.data or []
+
+
+def set_archived(job_id: str, archived: bool) -> Optional[dict]:
+    """Toggle the archived flag. Returns the updated row or None if not found."""
+    res = (
+        supabase_client.get()
+        .table(TABLE)
+        .update({"archived": archived})
+        .eq("id", job_id)
+        .execute()
+    )
+    rows = res.data or []
+    return rows[0] if rows else None
+
+
+def delete_job(job_id: str) -> bool:
+    """Hard-delete the row. Returns True if a row was removed, False if it didn't exist."""
+    res = supabase_client.get().table(TABLE).delete().eq("id", job_id).execute()
+    return bool(res.data)
 
 
 def set_status(job_id: str, status: str) -> None:
