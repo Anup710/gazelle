@@ -54,14 +54,16 @@ gazelle/
 │   ├── src/
 │   ├── .env          # ⚠ git-ignored — local only
 │   └── .env.example  # ✅ committed — template
-└── backend/          # backend (FastAPI + Python) — deploys to Render
-    ├── main.py
+└── gaz-server/       # backend (FastAPI + Python) — deploys to Render
     ├── requirements.txt
+    ├── runtime.txt   # python-3.11.9
+    ├── src/
+    │   └── main.py   # FastAPI app entry — uvicorn target is `src.main:app`
     ├── .env          # ⚠ git-ignored — local only
     └── .env.example  # ✅ committed — template
 ```
 
-Both `app/` and `backend/` get deployed from the **same repo**. You'll tell Render and Vercel which subdirectory to use ("root directory" setting). One repo, two deployments.
+Both `app/` and `gaz-server/` get deployed from the **same repo**. You'll tell Render and Vercel which subdirectory to use ("root directory" setting). One repo, two deployments.
 
 > **If you're using two separate repos instead:** the guide still works — just point Render at the backend repo and Vercel at the frontend repo. Skip the "root directory" steps.
 
@@ -179,6 +181,16 @@ create table jobs (
   full_text text,
   validation_result jsonb,
   error_message text,
+  -- Structured failure code (set only when status = 'failed').
+  -- Frontend switches on this enum instead of pattern-matching error_message.
+  failure_reason text
+    check (failure_reason in (
+      'non_educational',
+      'transcription_failed',
+      'embedding_failed',
+      'invalid_input',
+      'unknown'
+    )),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -266,10 +278,10 @@ The backend filters by `session_id` on every search (per Stage 1 TRD §9), so al
 
 ### 8.1 Create the env file
 
-Inside `backend/`, create a file called `.env` (this stays on your laptop, never committed):
+Inside `gaz-server/`, create a file called `.env` (this stays on your laptop, never committed):
 
 ```env
-# backend/.env
+# gaz-server/.env
 OPENAI_API_KEY=sk-proj-...                      # from Step 1
 GROQ_API_KEY=gsk_...                            # from Step 1
 SUPABASE_URL=https://abcdefghij.supabase.co     # from Step 6.3
@@ -281,10 +293,10 @@ QDRANT_API_KEY=...                              # from Step 7.2
 ALLOWED_ORIGINS=http://localhost:5173
 ```
 
-Also create `backend/.env.example` with the **same keys but blank values** (this **is** committed so other devs know what's needed):
+Also create `gaz-server/.env.example` with the **same keys but blank values** (this **is** committed so other devs know what's needed):
 
 ```env
-# backend/.env.example
+# gaz-server/.env.example
 OPENAI_API_KEY=
 GROQ_API_KEY=
 SUPABASE_URL=
@@ -296,17 +308,17 @@ ALLOWED_ORIGINS=http://localhost:5173
 
 Add `.env` to `.gitignore` if it isn't already:
 ```bash
-echo "backend/.env" >> .gitignore
+echo "gaz-server/.env" >> .gitignore
 ```
 
 ### 8.2 Run it locally
 
 ```bash
-cd backend
+cd gaz-server
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+uvicorn src.main:app --reload --port 8000
 ```
 
 Open http://localhost:8000/docs — FastAPI's auto-generated Swagger UI. If you see the endpoint list, the backend is running.
@@ -338,7 +350,7 @@ gh repo create gazelle --private --source=. --push
 # git branch -M main && git push -u origin main
 ```
 
-**Critical check before pushing:** make sure your `.gitignore` includes both `backend/.env` and `app/.env`. Run:
+**Critical check before pushing:** make sure your `.gitignore` includes both `gaz-server/.env` and `app/.env`. Run:
 ```bash
 git status --ignored | grep .env
 ```
@@ -359,17 +371,17 @@ You should see them listed as ignored. If not, **stop and fix**, then `git rm --
 | **Name** | `gazelle-backend` |
 | **Region** | Match your Supabase / Qdrant region |
 | **Branch** | `main` |
-| **Root Directory** | `backend` |
+| **Root Directory** | `gaz-server` |
 | **Runtime** | Python 3 |
 | **Build Command** | `pip install -r requirements.txt` |
-| **Start Command** | `uvicorn main:app --host 0.0.0.0 --port $PORT` |
+| **Start Command** | `uvicorn src.main:app --host 0.0.0.0 --port $PORT` |
 | **Plan** | Free |
 
 > ⚠ **Important:** Render's free tier spins down after 15 min of no traffic. The first request after spin-down takes 30–60 sec to wake up. The frontend handles this gracefully but expect it during your demo.
 
 ### 10.2 Add environment variables
 
-Scroll down to **"Environment Variables"** and add **the same keys from your local `backend/.env`** — but **leave `ALLOWED_ORIGINS` blank for now**, you'll fill it in at Step 13 once you know the Vercel URL.
+Scroll down to **"Environment Variables"** and add **the same keys from your local `gaz-server/.env`** — but **leave `ALLOWED_ORIGINS` blank for now**, you'll fill it in at Step 13 once you know the Vercel URL.
 
 | Key | Value |
 |---|---|
@@ -436,7 +448,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173. You should see the Gazelle UI. The sidebar should populate (empty list is fine). If you see CORS errors in the browser console, check that `ALLOWED_ORIGINS=http://localhost:5173` is set in `backend/.env` and that the backend is restarted.
+Open http://localhost:5173. You should see the Gazelle UI. The sidebar should populate (empty list is fine). If you see CORS errors in the browser console, check that `ALLOWED_ORIGINS=http://localhost:5173` is set in `gaz-server/.env` and that the backend is restarted.
 
 ### 11.3 Full local smoke test
 
@@ -502,7 +514,7 @@ https://gazelle.vercel.app,http://localhost:5173
 
 ### Backend CORS code (for reference)
 
-Your `backend/main.py` should have something like:
+Your `gaz-server/src/main.py` should have something like:
 ```python
 import os
 from fastapi.middleware.cors import CORSMiddleware
@@ -543,19 +555,19 @@ The single source of confusion for first-timers. Here's everything in one table.
 
 | Variable | Local file | Render dashboard | Vercel dashboard | Purpose |
 |---|---|---|---|---|
-| `OPENAI_API_KEY` | `backend/.env` | ✅ | — | OpenAI embeddings, GPT-4o-mini, TTS |
-| `GROQ_API_KEY` | `backend/.env` | ✅ | — | Groq Whisper for video + voice transcription |
-| `SUPABASE_URL` | `backend/.env` | ✅ | — | Postgres metadata DB |
-| `SUPABASE_KEY` | `backend/.env` | ✅ | — | Service role key (backend only — never expose) |
-| `QDRANT_URL` | `backend/.env` | ✅ | — | Vector DB cluster URL |
-| `QDRANT_API_KEY` | `backend/.env` | ✅ | — | Qdrant auth |
-| `ALLOWED_ORIGINS` | `backend/.env` | ✅ | — | CORS allow-list (frontend URLs) |
+| `OPENAI_API_KEY` | `gaz-server/.env` | ✅ | — | OpenAI embeddings, GPT-4o-mini, TTS |
+| `GROQ_API_KEY` | `gaz-server/.env` | ✅ | — | Groq Whisper for video + voice transcription |
+| `SUPABASE_URL` | `gaz-server/.env` | ✅ | — | Postgres metadata DB |
+| `SUPABASE_KEY` | `gaz-server/.env` | ✅ | — | Service role key (backend only — never expose) |
+| `QDRANT_URL` | `gaz-server/.env` | ✅ | — | Vector DB cluster URL |
+| `QDRANT_API_KEY` | `gaz-server/.env` | ✅ | — | Qdrant auth |
+| `ALLOWED_ORIGINS` | `gaz-server/.env` | ✅ | — | CORS allow-list (frontend URLs) |
 | `PYTHON_VERSION` | — | ✅ | — | Pin Render runtime (`3.11.9`) |
 | `VITE_API_BASE_URL` | `app/.env` | — | ✅ | Frontend → backend URL |
 
 **Rules of thumb:**
 - Anything starting with `VITE_` → frontend, lives in `app/.env` and Vercel only.
-- Anything else (especially API keys) → backend, lives in `backend/.env` and Render only.
+- Anything else (especially API keys) → backend, lives in `gaz-server/.env` and Render only.
 - **No secret should ever appear in `app/.env` or in the frontend code.** Anything in the frontend is visible to anyone who opens DevTools.
 
 ---
@@ -589,8 +601,8 @@ The single source of confusion for first-timers. Here's everything in one table.
 
 ### `.env` accidentally committed to git
 ```bash
-git rm --cached backend/.env app/.env
-echo "backend/.env" >> .gitignore
+git rm --cached gaz-server/.env app/.env
+echo "gaz-server/.env" >> .gitignore
 echo "app/.env" >> .gitignore
 git commit -m "Remove .env from tracking"
 git push
@@ -655,11 +667,11 @@ Print this. Tick as you go.
 - [ ] Supabase URL + service_role key copied
 - [ ] Qdrant cluster + URL + API key copied
 - [ ] Qdrant collection `transcript_chunks` created (size 1536, cosine)
-- [ ] `backend/.env` populated; `uvicorn` runs locally; `/sessions` returns `{"sessions": []}`
+- [ ] `gaz-server/.env` populated; `uvicorn src.main:app` runs locally; `/sessions` returns `{"sessions": []}`
 - [ ] `app/.env` populated; `npm run dev` runs; can submit a job end-to-end locally
 - [ ] `.gitignore` excludes both `.env` files
 - [ ] Code pushed to GitHub
-- [ ] Render web service created, root dir = `backend`, all env vars set, deploys green
+- [ ] Render web service created, root dir = `gaz-server`, all env vars set, deploys green
 - [ ] Render URL noted
 - [ ] Vercel project created, root dir = `app`, `VITE_API_BASE_URL` set to Render URL, deploys green
 - [ ] Vercel URL added to `ALLOWED_ORIGINS` on Render
