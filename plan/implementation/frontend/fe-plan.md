@@ -296,12 +296,16 @@ export const listSessions = () => request("/sessions");
 ```js
 import { request } from "./client";
 
-export const ragQuery = ({ session_id, query_text, conversation_summary, recent_turns }) =>
+export const ragQuery = ({ session_id, query_text, turn_count, conversation_summary, recent_turns }) =>
   request("/rag/query", {
     method: "POST",
-    body: { session_id, query_text, conversation_summary, recent_turns },
+    body: { session_id, query_text, turn_count, conversation_summary, recent_turns },
   });
 
+// turn_count = number of USER turns in this session BEFORE the current one (0 on first query).
+// The backend uses this to decide compaction cadence; it cannot infer turn position from
+// recent_turns alone because that array is capped at 4 turns.
+//
 // → {
 //     response: { text: string, language: "english"|"hindi"|"hinglish" },
 //     conversation_summary: string | null,  // only on every-4th turn
@@ -453,11 +457,13 @@ const handleSend = async (text) => {
   setMessagesBySession(m => ({ ...m, [sid]: [...(m[sid] || []), userMsg] }));
   setThinkingFor(sid);
 
+  // turn_count = user turns in this session BEFORE this one (so 0 on first query).
+  const turn_count = (messagesBySession[sid] || []).filter(m => m.role === "user").length;
   const { conversation_summary, recent_turns } = historyBySession[sid] || { conversation_summary: null, recent_turns: [] };
 
   let res;
   try {
-    res = await ragQuery({ session_id: sid, query_text: text, conversation_summary, recent_turns });
+    res = await ragQuery({ session_id: sid, query_text: text, turn_count, conversation_summary, recent_turns });
   } catch (e) {
     setThinkingFor(null);
     setToast({ kind: "error", message: humanizeError(e) });
@@ -600,7 +606,7 @@ function formatSeconds(s) {
 
 ## 10. Conversation History Protocol (Client-Side)
 
-The backend is stateless. The client maintains, **per session**, a `{ conversation_summary, recent_turns }` object and sends it with every `/rag/query` call.
+The backend is stateless. The client maintains, **per session**, a `{ conversation_summary, recent_turns }` object and sends it with every `/rag/query` call. It also sends a `turn_count` (computed at send time, not stored) so the backend can decide when to compact.
 
 ```js
 // lib/conversation.js
@@ -622,9 +628,17 @@ export function updateHistory(historyBySession, sid, userText, assistantText, ne
 }
 ```
 
-**Important:** the client does **not** decide when to compact — the backend does that and returns a fresh summary on its own cadence (`null` on non-compaction turns). The client's only responsibility is to persist whatever it receives and echo it back next request.
+**`turn_count` is not stored** — it's derived per-request from the message log:
 
-**On session switch:** load the per-session history from `historyBySession[id]`. If absent (e.g., first time viewing a session loaded from `GET /sessions`), initialize to `{ conversation_summary: null, recent_turns: [] }` — V1 acceptance is that page refresh loses chat history but sidebar still shows the session.
+```js
+const turn_count = (messagesBySession[sid] || []).filter(m => m.role === "user").length;
+```
+
+This is the count of user turns **before** the current one (so 0 on the very first query, 3 right before the 4th query, etc.). The backend uses `(turn_count + 1) % 4 === 0` to decide compaction — this works reliably past turn 4 even though `recent_turns` is capped, because the count is derived from the full message log on the client.
+
+**Important:** the client does **not** decide when to compact — the backend does that and returns a fresh summary on its own cadence (`null` on non-compaction turns). The client's only responsibility is to send `turn_count`, persist whatever summary it receives, and echo it back next request.
+
+**On session switch:** load the per-session history from `historyBySession[id]`. If absent (e.g., first time viewing a session loaded from `GET /sessions`), initialize to `{ conversation_summary: null, recent_turns: [] }` — V1 acceptance is that page refresh loses chat history but sidebar still shows the session. `turn_count` derives from `messagesBySession[id]`, which is also empty after refresh — so the cycle restarts cleanly.
 
 ---
 
