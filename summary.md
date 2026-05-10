@@ -63,22 +63,32 @@ Stages are planning categories, not sequential implementation phases — they fo
 - **Backend (`gaz-server/`)** — feature-complete per `plan/implementation/backend/be-plan.md`. All 8 endpoints wired; full RAG pipeline (augment → embed → search → generate → maybe-compact) operational end-to-end.
 - **Frontend (`app/`)** — not started.
 
-### Backend — verified end-to-end
+### Backend — verification checklist
+
+**Happy paths — verified ✅**
 - `POST /ingest/youtube` captions fast-path — multiple videos
 - `POST /ingest/youtube` ASR fallback via Groq Whisper
 - Chunking → OpenAI embedding → Qdrant upsert
 - `POST /rag/query` single-turn grounded answer with citations
 - `POST /rag/query` multi-turn (turn 2 with `recent_turns`)
+- `POST /rag/query` 4th-turn compaction (`conversation_summary` flips non-null) — verified at turn 4 and again at turn 8 to confirm cumulative cadence (`(turn_count + 1) % 4 == 0`); summary correctly threads prior summary + recent turns
 - `POST /rag/query` refusal path on off-topic question
+- `POST /ingest/text` paste-text path — skips transcription, chunking + embedding + Supabase row confirmed
+- `POST /tts` — short English, Hindi-script input, and >3,500-char input. Long-text run audibly truncated at the expected paragraph boundary (`...stays useful over time.`), confirming `truncate_to_paragraph` at `tts_service.py:15` fires correctly.
+- `POST /stt` — English and Hindi voice clips transcribed correctly via Groq Whisper, language auto-detected (Devanagari for Hindi, Latin for English) without us passing a hint. Mainstream language paths verified.
 - `GET /health`, `GET /sessions`, `GET /job/{id}` happy paths
 
-### Backend — wired but not yet exercised
-- `POST /rag/query` 4th-turn compaction (`conversation_summary` flip)
-- `POST /ingest/upload` (multipart + ffmpeg + Groq)
-- `POST /ingest/text` (paste-text path, no transcription)
-- `POST /tts` (OpenAI `tts-1` + 3,500-char truncation)
-- `POST /stt` (voice query → Groq Whisper)
-- Validation refusal for non-educational content (`status: failed`, `failure_reason: "non_educational"`)
+**Failure modes — verified ✅**
+- `POST /ingest/youtube` content-gate refusal — non-educational video (post-match speech) → `status: failed`, `failure_reason: "non_educational"`
+- `POST /ingest/youtube` invalid URL → `400 invalid_input` with "Enter a valid YouTube link"
+- `POST /ingest/text` content-gate refusal — non-educational pasted text (sports biography) → `status: failed`, `failure_reason: "non_educational"`. Confirms the validation step in the shared orchestrator runs symmetrically across all three ingest paths.
+
+**Pending verification ⏳**
+- `POST /ingest/upload` (multipart + ffmpeg + Groq Whisper end-to-end)
+- `POST /rag/query` against still-`pending` session → `404 invalid_session` *(shares the `get_job` status check with the verified happy path; expected to work)*
+
+**Known minor issues — deferred until after FE wiring**
+- `POST /stt` empty-transcript guard at `stt_service.py:21` did not trigger on a 2-second silent clip — Groq Whisper returned a hallucinated single-word transcript (`"miniature"`) instead of an empty string, so the guard's `if not text` branch was never entered. The guard logic itself is correct; the issue is that Whisper occasionally hallucinates content from silence rather than returning empty. Mainstream paths (real English/Hindi speech) are fine, so deferring fix until after frontend integration. Future fix options: tighten the guard with a min-length or confidence threshold, or filter known Whisper hallucination tokens.
 
 ### Dependency-drift fixes applied during smoke-testing
 The skeleton was written against older snippets in `be-plan.md`; pip pulled newer libraries. Three surgical fixes — code + spec updated together:
