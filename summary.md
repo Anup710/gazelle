@@ -44,6 +44,8 @@ Stages are planning categories, not sequential implementation phases — they fo
 | `POST /ingest/upload` | 0+1 | Upload video file (multipart) → returns `job_id`, triggers full pipeline |
 | `POST /ingest/text` | 0+1 | Submit pasted transcript → returns `job_id`, triggers full pipeline |
 | `GET /job/{job_id}` | 0+1 | Poll job status (`pending → transcribing → validating → embedding → ready`) |
+| `PATCH /job/{job_id}/archive` | 4 | Toggle `archived` flag on a session (sidebar "Archived" section) |
+| `DELETE /job/{job_id}` | 4 | Hard-delete a session (Supabase row + Qdrant points, idempotent) |
 | `GET /sessions` | 0 | List all sessions for sidebar (metadata only, no chat history) |
 | `POST /stt` | 2 | Transcribe voice query to text (Groq Whisper) |
 | `POST /rag/query` | 2+3 | Text query → RAG pipeline → structured response with citations |
@@ -60,8 +62,52 @@ Stages are planning categories, not sequential implementation phases — they fo
 ## Implementation
 
 ### Status (as of 2026-05-10)
-- **Backend (`gaz-server/`)** — feature-complete per `plan/implementation/backend/be-plan.md`. All 8 endpoints wired; full RAG pipeline (augment → embed → search → generate → maybe-compact) operational end-to-end.
-- **Frontend (`app/`)** — not started.
+- **Backend (`gaz-server/`)** — feature-complete per `plan/implementation/backend/be-plan.md` + amendments. 10 endpoints wired (8 original + `PATCH /job/{id}/archive` + `DELETE /job/{id}`). Full RAG pipeline operational end-to-end. CORS allow_methods extended to `[GET, POST, PATCH, DELETE, OPTIONS]`.
+- **Frontend (`app/`)** — feature-complete + verified end-to-end. Vite + React 19, all 6 seams wired to BE, plus archive/delete UI, recent-activity sort, and document.body theming. All 12 happy/edge cases from FE plan §16 confirmed.
+
+### Frontend — implementation summary
+- **Tree:** `app/src/{api,components,hooks,lib}` per FE plan §3. 7 API helpers, 10 components, 2 hooks, 6 lib modules.
+- **Real wiring landed in one refactor wave** (single visual-parity pass first, then mocks → real):
+  - Seam 1 — `GET /sessions` on mount; sidebar groups by `relativeDate(created_at)`.
+  - Seams 2+3 — `POST /ingest/{youtube|upload|text}` → `useJobPolling` (2s interval) drives `STATUS_TO_STAGE_INDEX` → auto-transition to chat on `ready`. Failed jobs render structured-`failure_reason` copy + "Try a different input".
+  - Seam 4 — `POST /rag/query` with derived `turn_count`, `conversation_summary`, `recent_turns`. `insufficient_context` renders as a normal bubble.
+  - Citation tokenizer (`[N]` regex) + `adaptCitation` (BE `timestamp_*`/`relevance_score` → UI `ts`/`relevance`).
+  - Two-tier history protocol (summary + last 4 turns) per `lib/conversation.js`; backend owns compaction cadence via `(turn_count + 1) % 4 === 0`.
+  - Seam 5 — `MediaRecorder` (webm/opus → mp4 fallback for Safari) + 8s auto-stop → `POST /stt` → fills draft (no auto-send).
+  - Seam 6 — `POST /tts` → object URL → native `<Audio>` with progress + 3,500-char truncation note.
+  - Errors: shared `humanizeError` for the toast layer; inline alerts for input validation; `failure_reason: "non_educational"` gets the bespoke copy.
+  - A11y: aria-label/aria-pressed on mic, cite buttons; aria-live on the composer status; theme persisted to localStorage via `useTweaks`.
+
+### Frontend — drift patches applied to `fe-plan.md` before implementation
+1. §7 `api/job.js` JSDoc — added structured `failure_reason` enum to the `failed` response shape.
+2. §8 Seam 4 — `asstMsg` now sets `responseText: res.response.text` (Seam 6 references it; was an inconsistency).
+3. §11 — content-gate UI now branches on `job.failure_reason === "non_educational"` rather than pattern-matching `error_message`.
+
+### Frontend — post-V1 UX amendments (full text in `fe-plan.md` §21)
+1. **Theme on `document.body`** — replaced the wrapper `<div className={themeClass}>` pattern with `useEffect` that toggles theme class on `body`. Fixed the focus theme cascade bug where the main pane stayed cream while sidebar correctly turned dark. Plus `color-scheme: dark` on `.theme-focus` so native widgets match.
+2. **Recent-activity sort in sidebar** — client-only `last_activity_at` field per session bumps on submit and on every send. Sidebar sorts desc + groups by `relativeDate(last_activity_at)`. In-memory only (V1 trade-off).
+3. **Archive + delete sessions** — hover-revealed action buttons per row, status-aware: failed → Trash; ready → Archive (collapsible "Archived (N)" section at sidebar bottom); archived → Restore + Trash (delete forever). `<button>` rows refactored to `<div role="button">` to legally nest action buttons. New API helpers `archiveJob`, `deleteJob`. Three new icons: Archive, Restore, Trash.
+
+### Frontend — verification checklist (V1 demo-ready)
+
+**Happy paths — verified ✅**
+- App boot from cold: sidebar populates from `GET /sessions`; theme applies on body; archived collapsed by default
+- New chat → YouTube URL → ProcessingView ring fills as `useJobPolling` advances stage labels → auto-transition to chat on `ready`
+- Text query → assistant bubble with `[N]` citation markers → click `[1]` → CitationPopover with verbatim chunk text + mm:ss range + relevance %
+- Multi-turn (4+ queries): verified `conversation_summary` non-null on the 4th request, `recent_turns` capped at 8 messages
+- Voice input via MediaRecorder → `POST /stt` → text fills composer (no auto-send)
+- TTS playback via native `<Audio>` with progress bar; pause works
+- Theme switcher (Scholar / Studio / Focus) — persists across refresh; Focus now correctly dark across main panel + main panel text
+- Recent-activity sort — sending a message in an old session bumps it to the top of "Today"
+- Archive (ready session) → moves into "Archived (N)" section
+- Restore (from archived) → moves back to active list
+- Delete failed session → confirm → row gone (Supabase verified)
+- Delete forever (from archived) → confirm → row gone (Supabase verified, Qdrant points cleaned)
+- Submit non-educational content → ProcessingView flips to failure card with `failure_reason: "non_educational"` copy + "Try a different input"
+- Off-topic query → backend `insufficient_context` rendered as a normal bubble (no special UI)
+- Refresh → sidebar rehydrates; chat history clears (V1 deliberate)
+
+**Manual QA — closed.** No blocking defects.
 
 ### Backend — verification checklist
 
@@ -83,6 +129,13 @@ Stages are planning categories, not sequential implementation phases — they fo
 - `POST /ingest/youtube` invalid URL → `400 invalid_input` with "Enter a valid YouTube link"
 - `POST /ingest/text` content-gate refusal — non-educational pasted text (sports biography) → `status: failed`, `failure_reason: "non_educational"`. Confirms the validation step in the shared orchestrator runs symmetrically across all three ingest paths.
 
+**Session admin — verified ✅**
+- `PATCH /job/{id}/archive {archived: true}` → row updates, returned `archived: true`; `GET /sessions` still includes the row with `archived: true` field
+- `PATCH /job/{id}/archive {archived: false}` → restores, row returns to active list
+- `DELETE /job/{id}` on failed session → 204; subsequent `GET /job/{id}` → 404 invalid_session; row gone from Supabase
+- `DELETE /job/{id}` on ready session → 204; Qdrant points for that `session_id` are also gone (idempotent filter delete)
+- CORS preflight: `OPTIONS /job/{id}/archive` and `OPTIONS /job/{id}` → 200 with proper Allow headers (after `allow_methods` extended to include PATCH + DELETE)
+
 **Pending verification ⏳**
 - `POST /ingest/upload` (multipart + ffmpeg + Groq Whisper end-to-end)
 - `POST /rag/query` against still-`pending` session → `404 invalid_session` *(shares the `get_job` status check with the verified happy path; expected to work)*
@@ -99,10 +152,13 @@ The skeleton was written against older snippets in `be-plan.md`; pip pulled newe
 ### Prototype-only overrides
 - `MIN_SIMILARITY_SCORE=0.2` in `gaz-server/.env` (spec default 0.72). Lowered while short test videos produce only 2–3 chunks. Revisit once realistic content distribution is in the index.
 
+### Schema migrations applied
+- **2026-05-10:** `alter table jobs add column archived boolean not null default false;` — supports the archive/delete UI per FE plan §21.3 + BE plan §27.3. Canonical CREATE TABLE in `plan/hosting/hosting.md` §6.2 also updated.
+
 ### Remaining work
-- Burn through the 6 unexercised endpoints as a verification checklist.
-- Frontend implementation per `plan/implementation/frontend/plan.md`.
+- `POST /ingest/upload` end-to-end smoke test (multipart + ffmpeg + Groq Whisper) — only ingest path not yet exercised; shares the orchestrator with the verified text + youtube paths.
 - Re-tune `MIN_SIMILARITY_SCORE` against real retrieval-score distributions before locking the demo.
+- Comprehensive UI/UX QA pass with a fresh eye now that the core demo is complete.
 
 ## Future Improvements
 

@@ -281,7 +281,8 @@ export const getJob = (jobId) => request(`/job/${jobId}`);
 // Response shape varies by status — see TRD §348:
 //   pending|transcribing|validating|embedding: { job_id, status, source_type, title, created_at }
 //   ready: + { source, detected_language, duration_seconds }
-//   failed: { job_id, status: "failed", error_message }
+//   failed: + { failure_reason, error_message }
+//     failure_reason ∈ "non_educational" | "transcription_failed" | "embedding_failed" | "invalid_input" | "unknown"
 ```
 
 ### `src/api/sessions.js`
@@ -473,7 +474,8 @@ const handleSend = async (text) => {
   const asstMsg = {
     id: `a_${Date.now()}`,
     role: "assistant",
-    parts: tokenizeWithCitations(res.response.text),   // see §9
+    responseText: res.response.text,                     // raw text — TTS reads this (§8 Seam 6)
+    parts: tokenizeWithCitations(res.response.text),     // see §9
     citations: res.citations.map(adaptCitation),         // see §9
     lang: capitalize(res.response.language),             // "English"|"Hindi"|"Hinglish"
   };
@@ -668,7 +670,7 @@ The backend's error envelope (per `gazelle_stage2_trd.md:594`):
 | File > 500 MB | "File exceeds 500 MB limit" |
 | Transcript < 80 chars | "Paste at least a few paragraphs of transcript" |
 
-**Content-gate rejection** (job ends in `failed` due to non-educational content): the backend should set `error_message` to surface this. Frontend renders: *"This content doesn't appear to be educational. Please try a lecture, tutorial, or explainer."* — pattern-match `error_message` for "educational" or rely on a dedicated error code if backend exposes one.
+**Content-gate rejection** (job ends in `failed` due to non-educational content): the backend exposes a structured `failure_reason` enum on the job row. Branch on `job.failure_reason === "non_educational"` and render: *"This content doesn't appear to be educational. Please try a lecture, tutorial, or explainer."* For other failure reasons (`transcription_failed`, `embedding_failed`, `unknown`), fall back to: *"Could not process this video. Please try another."*
 
 ```js
 // utils/humanizeError.js
@@ -861,6 +863,101 @@ These are not blockers — sensible defaults are above — but a 2-minute confir
 5. **TTS truncation surfacing:** does `/tts` return any signal that truncation occurred (header, JSON wrapper), or do we infer from input length? (§8 Seam 6) — current plan infers client-side.
 
 If any of these come back with a different answer, the affected section is the only one that changes.
+
+---
+
+## 21. Implementation Amendments (post-original-plan)
+
+The plan above remains the contract for the V1.0 build. The amendments below capture decisions and code shapes that emerged during implementation and shipped with the demo. Sections are referenced by their original number; if you're rebuilding from scratch, read the original section first, then the amendment.
+
+### 21.1 Theme is applied to `document.body` (§6, §14)
+
+The original §6 sketches showed `<div className={themeClass}>...</div>` wrapping the app. In implementation that caused the focus theme to half-apply (sidebar darkened correctly because `.sidebar { background: var(--bg-side) }` is a descendant of the wrapper, but `body { background: var(--bg); color: var(--ink); }` is OUTSIDE the wrapped subtree — so body kept its `:root` cream).
+
+**Final pattern** (in `App.jsx`):
+```jsx
+const THEME_CLASSES = ["theme-scholar", "theme-studio", "theme-focus"];
+useEffect(() => {
+  const next = `theme-${t.theme || "scholar"}`;
+  THEME_CLASSES.forEach((c) => document.body.classList.remove(c));
+  document.body.classList.add(next);
+}, [t.theme]);
+```
+
+The wrapper `<div>` is removed; `App` returns a Fragment containing `<div className="app">` directly. With `body` itself carrying the theme class, every `body` rule and every descendant variable lookup resolves to the active theme.
+
+`styles.css` adds `color-scheme` so native widgets (scrollbars, autofill, native `<select>` menus) match:
+```css
+.theme-scholar, .theme-studio { color-scheme: light; }
+.theme-focus { color-scheme: dark; }
+```
+
+### 21.2 Recent-activity sort in the sidebar (§6, §3 Sidebar)
+
+Sessions sort by a client-only `last_activity_at` field that defaults to `created_at` and bumps on activity. The behavior matches mainstream chat apps (most-recently-touched bubbles to the top).
+
+State updates:
+- On `listSessions` mount: each row is rehydrated as `{ ...row, last_activity_at: row.created_at }`.
+- On `handleSubmitInput` success: new session gets `last_activity_at: nowISO()`.
+- On `handleSend` (immediately after staging the user message): the active session's `last_activity_at` is bumped to `nowISO()`.
+
+`Sidebar.jsx` does `[...sessions].sort(byActivityDesc)`, splits into active vs archived, then groups active into Today / Earlier by `relativeDate(last_activity_at)`. `SessionItem` reads `s.last_activity_at || s.created_at` for the date pill.
+
+V1 trade-off: in-memory only. After refresh, sessions revert to `created_at` order until next interaction. Same trade-off class as "chat clears on refresh" already documented in §15.
+
+### 21.3 Session archive + delete (new §11 row + new actions per row)
+
+Added per the user's "elegant cleanup" request. Three new affordances appear hover-revealed on each session row (the row was refactored from `<button>` to `<div role="button">` so real `<button>` action elements can nest inside).
+
+| Status | Hover affordance | Action |
+|---|---|---|
+| `failed` | Trash icon | `window.confirm("Remove this failed ingestion?")` → `DELETE /job/{id}` → `pruneLocalSession(id)` |
+| `ready` (and not archived) | Archive icon | optimistic PATCH `{archived: true}` → row moves to "Archived (N)" section. Reverts on failure with toast. |
+| `archived: true` | Restore + Trash icons | Restore: PATCH `{archived: false}`. Trash: `window.confirm("Delete this session forever?")` → DELETE → prune. |
+| In-progress (`pending|transcribing|validating|embedding`) | none | Wait for terminal state. |
+
+The "Archived (N)" heading is a collapsible toggle at the bottom of `.session-list`. Open/closed state persists to `localStorage` under `gazelle.archiveOpen`. Archived sessions stay clickable — opening one navigates into its chat normally; archived ≠ read-only. To remove from the active list permanently, restore first or hit "Delete forever" from the archive.
+
+API client (`src/api/job.js`):
+```js
+export const archiveJob = (jobId, archived) =>
+  request(`/job/${jobId}/archive`, { method: "PATCH", body: { archived } });
+export const deleteJob = (jobId) =>
+  request(`/job/${jobId}`, { method: "DELETE" });
+```
+
+App handlers (`src/App.jsx`):
+- `handleArchive(sid, next)` — optimistic local update, rollback + toast on failure.
+- `handleDelete(sid)` — awaits server success, then `pruneLocalSession(id)` (drops from `sessions[]`, clears `messagesBySession[id]` + `historyBySession[id]`, navigates to "empty" view if it was the active session).
+- `handleAbandonFailure` (existing "Try a different input" flow) — also calls `deleteJob` best-effort so failed sessions don't accumulate when the user abandons.
+
+CSS additions in `styles.css`:
+- `.session-item .si-action` — opacity transition; hidden until `:hover` or `:focus-within`.
+- `.si-btn` (neutral) and `.si-btn-danger` (red) for action buttons.
+- `.session-section-toggle` — clickable variant of `.session-section-label` for the Archived heading.
+- Three new icons in `Icon.jsx`: `Archive`, `Restore`, `Trash`.
+
+Backend contract for these endpoints lives in `be-plan.md` §27.1.
+
+### 21.4 File-tree updates since §3
+
+- `src/components/SessionItem.jsx` is now a `<div role="button">` with `onKeyDown` for Enter/Space → onClick, so action `<button>`s inside are valid HTML.
+- `Icon.jsx` gained `Archive`, `Restore`, `Trash`, in addition to the original 13.
+- `lib/humanizeError.js` exports both `humanizeError(e)` (toast text) AND `failureMessage(failure_reason)` (the structured-failure-reason branch used by ProcessingView).
+- `lib/format.js` exports `formatSeconds`, `relativeDate`, and `capitalize`.
+- `hooks/useJobPolling.js` is implemented as specified; `hooks/useTweaks.js` is the minimal localStorage-backed theme hook (the original prototype's tweaks panel is fully removed — only the theme dropdown survives, in the sidebar foot).
+- `lib/recorder.js`, `lib/citations.js`, `lib/conversation.js`, `lib/statusMap.js` — all implemented per their respective sections.
+- `lib/mockData.js` was a temporary scaffold during visual-parity build (Task #14); deleted once §16 (Seam 4) wired real `/rag/query`.
+
+### 21.5 BE drift fixes that affected the FE contract
+
+None. The three BE drift fixes (yt-dlp v1 rename, Groq language map, qdrant-client `query_points()`) are internal to the BE. The FE contract is unchanged.
+
+### 21.6 V1 manual-QA outcome
+
+All twelve cases in §16 (happy + edge) verified end-to-end against a live BE. Captured in `summary.md` under "Frontend — verification checklist". Two follow-ups deferred:
+- Whisper hallucinated-silence case (BE issue, not FE — see `summary.md` "Known minor issues").
+- Re-tune `MIN_SIMILARITY_SCORE` from prototype `0.2` back toward spec `0.72` once realistic content distribution is in the index.
 
 ---
 

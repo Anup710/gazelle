@@ -1636,4 +1636,105 @@ If a new question arises during implementation, raise it in this document **befo
 
 ---
 
+## 27. Implementation Amendments (post-original-plan)
+
+The plan above remains the contract for the V1.0 build. The amendments below capture decisions, drift fixes, and new endpoints that emerged during implementation and shipped with the demo. Sections are referenced by their original number.
+
+### 27.1 Session archive + delete endpoints (new in §7)
+
+Added per the user's "delete failed, archive ready" request. Two new routes in `src/routes/jobs.py`:
+
+```python
+@router.patch("/job/{job_id}/archive", response_model=JobView)
+async def archive_job(job_id: str, body: ArchiveRequest) -> JobView:
+    # 404 if not found; otherwise toggle the archived flag and return the updated row.
+
+@router.delete("/job/{job_id}", status_code=204)
+async def delete_job(job_id: str) -> Response:
+    # 404 if not found.
+    # qdrant_client.delete_by_session(job_id) — idempotent (no-op when no points exist).
+    # jobs_repo.delete_job(job_id)
+    # 204 No Content.
+```
+
+`ArchiveRequest` schema (in `src/schemas/jobs.py`):
+```python
+class ArchiveRequest(BaseModel):
+    archived: bool
+```
+
+`JobView` and `SessionRow` both gain `archived: bool = False`. `routes/sessions.py` reads `r.get("archived", False)` and includes it in every row of `GET /sessions`.
+
+**Repo additions** (`src/db/jobs_repo.py`):
+- `set_archived(job_id, archived) -> Optional[dict]` — supabase update, returns the updated row (or None if not found).
+- `delete_job(job_id) -> bool` — supabase delete by id, returns True if a row was removed.
+- `list_sessions()` now selects `id,title,source_type,status,archived,created_at`.
+
+### 27.2 Qdrant session cleanup helper (new in §15)
+
+New helper in `src/clients/qdrant_client.py`:
+
+```python
+def delete_by_session(session_id: str) -> None:
+    """Idempotent delete of all points for a session. Safe even when no points exist
+    (e.g. session failed before embedding). Errors are logged, not raised."""
+    client = get()
+    name = settings().QDRANT_COLLECTION
+    try:
+        client.delete(
+            collection_name=name,
+            points_selector=qm.FilterSelector(
+                filter=qm.Filter(must=[
+                    qm.FieldCondition(key="session_id", match=qm.MatchValue(value=session_id)),
+                ])
+            ),
+        )
+    except Exception as e:
+        log.warning("qdrant.delete_failed",
+                    extra={"session_id": session_id, "error": str(e)[:200]})
+```
+
+Called unconditionally by `routes/jobs.py:delete_job` before the Supabase row delete. Filtered-delete on zero matches is a no-op, so we don't branch on `failure_reason` or `status` — safer for the partial-failure cases (`embedding_failed`, `unknown`) where stray vectors might exist.
+
+### 27.3 Schema migration (amends §5)
+
+The `jobs` table gets a new column `archived boolean not null default false`.
+
+For greenfield deploys, the canonical CREATE TABLE in `plan/hosting/hosting.md` §6.2 already includes the column.
+
+For an existing deployment, run once in the Supabase SQL editor:
+```sql
+alter table jobs
+  add column if not exists archived boolean not null default false;
+```
+
+### 27.4 CORS allow_methods extended (amends §20)
+
+The original §20 listed `allow_methods=["GET", "POST", "OPTIONS"]`. Browsers send `OPTIONS` preflight for `PATCH` and `DELETE`; Starlette's CORSMiddleware returns **400 Bad Request** on the preflight when the requested method isn't in the allow list, which surfaced in the FE as either "Connection issue" toasts (DELETE) or a 400 in the console (PATCH).
+
+Final `src/main.py`:
+```python
+allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+```
+
+`allow_headers`, `allow_origins`, and `allow_origin_regex` are unchanged.
+
+### 27.5 Dependency-drift fixes applied during smoke-testing
+
+The skeleton was written against older snippets in this plan; pip resolved newer libraries. Three surgical fixes were made (code + spec):
+
+1. **`youtube-transcript-api` v1.x rename** — `list_transcripts()` → `().list()`; `fetch()` returns a dataclass needing `.to_raw_data()`. Affects `src/pipeline/transcription/captions.py`.
+2. **Groq Whisper language name → ISO map** — `verbose_json` returns names like `"english"`, not ISO codes. Slicing happened to work for `en`/`hi` but produced wrong codes elsewhere. Affects `src/pipeline/transcription/asr.py`.
+3. **`qdrant-client` ≥ 1.12 API change** — `.search()` removed → `.query_points()`; `query_vector=` → `query=`; response unwrapped via `.points`. Affects `src/rag/retrieve.py`.
+
+### 27.6 Prototype-only tuning override
+
+`MIN_SIMILARITY_SCORE=0.2` was set in `gaz-server/.env` (spec default `0.72`). Intentional — short test videos produce only 2–3 chunks, and `0.72` was rejecting too aggressively during smoke testing. The spec value remains `0.72` in `core/config.py`'s `Settings` default; revisit the `.env` override once realistic content distribution is in the index.
+
+### 27.7 Manual-QA outcome (amends §21)
+
+All happy paths from §21 verified end-to-end. Failure modes verified for `non_educational` content gate (YouTube + paste-text symmetry) and bad-URL `invalid_input` 400. `POST /ingest/upload` end-to-end is the one remaining gap; smoke checklist captured in `summary.md`. One known minor issue (Whisper hallucinated-silence on truly silent voice clips) deferred — guard logic at `stt_service.py:21` is correct; the issue is upstream (Whisper occasionally hallucinates from silence rather than returning empty text).
+
+---
+
 **End of plan.** This document is the contract. If something needs to change, change this file first, then change the code.
