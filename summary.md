@@ -57,6 +57,43 @@ Stages are planning categories, not sequential implementation phases — they fo
 4. User asks a question (text or voice) → RAG pipeline triggers → grounded answer with citations returned → follow-up questions supported
 5. User can create a new chat (new session) with a different video at any time
 
+## Implementation
+
+### Status (as of 2026-05-10)
+- **Backend (`gaz-server/`)** — feature-complete per `plan/implementation/backend/be-plan.md`. All 8 endpoints wired; full RAG pipeline (augment → embed → search → generate → maybe-compact) operational end-to-end.
+- **Frontend (`app/`)** — not started.
+
+### Backend — verified end-to-end
+- `POST /ingest/youtube` captions fast-path — multiple videos
+- `POST /ingest/youtube` ASR fallback via Groq Whisper
+- Chunking → OpenAI embedding → Qdrant upsert
+- `POST /rag/query` single-turn grounded answer with citations
+- `POST /rag/query` multi-turn (turn 2 with `recent_turns`)
+- `POST /rag/query` refusal path on off-topic question
+- `GET /health`, `GET /sessions`, `GET /job/{id}` happy paths
+
+### Backend — wired but not yet exercised
+- `POST /rag/query` 4th-turn compaction (`conversation_summary` flip)
+- `POST /ingest/upload` (multipart + ffmpeg + Groq)
+- `POST /ingest/text` (paste-text path, no transcription)
+- `POST /tts` (OpenAI `tts-1` + 3,500-char truncation)
+- `POST /stt` (voice query → Groq Whisper)
+- Validation refusal for non-educational content (`status: failed`, `failure_reason: "non_educational"`)
+
+### Dependency-drift fixes applied during smoke-testing
+The skeleton was written against older snippets in `be-plan.md`; pip pulled newer libraries. Three surgical fixes — code + spec updated together:
+1. **`youtube-transcript-api` v1.x rename** — `list_transcripts()` → `().list()`; `fetch()` now returns a dataclass needing `.to_raw_data()`. (`captions.py`)
+2. **Groq Whisper language name → ISO map** — `verbose_json` returns names like `"english"`, not ISO codes. Slicing to 2 chars happened to work for en/hi but produced wrong codes for other languages. (`asr.py`)
+3. **`qdrant-client` ≥ 1.12 API change** — `.search()` removed → `.query_points()`; `query_vector=` → `query=`; response unwrapped via `.points`. (`retrieve.py`)
+
+### Prototype-only overrides
+- `MIN_SIMILARITY_SCORE=0.2` in `gaz-server/.env` (spec default 0.72). Lowered while short test videos produce only 2–3 chunks. Revisit once realistic content distribution is in the index.
+
+### Remaining work
+- Burn through the 6 unexercised endpoints as a verification checklist.
+- Frontend implementation per `plan/implementation/frontend/plan.md`.
+- Re-tune `MIN_SIMILARITY_SCORE` against real retrieval-score distributions before locking the demo.
+
 ## Future Improvements
 
 - **Whole-lecture summarization:** Top-k retrieval fails for "summarize the entire lecture" queries since chunks only cover fragments. Fix: generate a pre-computed summary at ingestion time and route summary-intent queries to it instead of the RAG path.

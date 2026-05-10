@@ -905,6 +905,10 @@ Timestamp-less chunks still flow through the pipeline cleanly — `start_time` a
 ### 12.4 ASR wrapper — `pipeline/transcription/asr.py`
 
 ```python
+# Groq Whisper returns the language *name* (e.g. "english"), not the ISO code.
+# Map to lowercase ISO 639-1 to match the captions path. V1 targets en + hi.
+_NAME_TO_ISO = {"english": "en", "hindi": "hi"}
+
 async def asr_transcribe(audio_path: str) -> tuple[list[dict], str]:
     with open(audio_path, "rb") as f:
         rsp = await groq_client.get().audio.transcriptions.create(
@@ -917,9 +921,11 @@ async def asr_transcribe(audio_path: str) -> tuple[list[dict], str]:
         {"start": seg["start"], "end": seg["end"], "text": seg["text"]}
         for seg in rsp.segments
     ]
-    language = rsp.language[:2] if rsp.language else "en"
+    language = _NAME_TO_ISO.get((rsp.language or "").strip().lower(), "en")
     return segments, language
 ```
+
+> **Why the name→ISO mapping (not `rsp.language[:2]`):** Groq's `verbose_json` returns the language *name* (`"english"`, `"hindi"`), not an ISO code. Slicing to 2 chars happens to work for English/Hindi by coincidence and produces wrong codes for other languages (e.g. `"spanish"[:2] = "sp"`, real ISO is `"es"`). The captions path already returns lowercase ISO codes from `youtube-transcript-api` — both paths must match so `detected_language` is consistent across rows.
 
 If Groq returns 4xx/5xx → raise `TranscriptionError("ASR transcription failed")` for the orchestrator to catch.
 
@@ -1078,13 +1084,16 @@ async def embed_query(text: str) -> list[float]:
     return rsp.data[0].embedding
 
 def search(session_id: str, vector: list[float]) -> list[Citation]:
-    hits = qdrant_client.get().search(
+    # qdrant-client >=1.12 removed .search(); the replacement .query_points()
+    # returns a QueryResponse whose .points attribute holds the hit list.
+    res = qdrant_client.get().query_points(
         collection_name=settings().QDRANT_COLLECTION,
-        query_vector=vector,
+        query=vector,
         query_filter={"must": [{"key": "session_id", "match": {"value": session_id}}]},
         limit=settings().TOP_K,
         with_payload=True,
     )
+    hits = res.points
     citations = []
     for h in hits:
         if h.score < settings().MIN_SIMILARITY_SCORE:
