@@ -46,7 +46,7 @@ Stages are planning categories, not sequential implementation phases — they fo
 | `GET /job/{job_id}` | 0+1 | Poll job status (`pending → transcribing → validating → embedding → ready`) |
 | `PATCH /job/{job_id}/archive` | 4 | Toggle `archived` flag on a session (sidebar "Archived" section) |
 | `DELETE /job/{job_id}` | 4 | Hard-delete a session (Supabase row + Qdrant points, idempotent) |
-| `GET /sessions` | 0 | List all sessions for sidebar (metadata only, no chat history) |
+| `GET /sessions` | 0 | List all sessions for sidebar + landing (includes `duration_seconds` + `detected_language` for the "Pick up where you left off" cards) |
 | `POST /stt` | 2 | Transcribe voice query to text (Groq Whisper) |
 | `POST /rag/query` | 2+3 | Text query → RAG pipeline → structured response with citations |
 | `POST /tts` | 3 | On-demand text-to-speech for a response |
@@ -87,6 +87,7 @@ Stages are planning categories, not sequential implementation phases — they fo
 1. **Theme on `document.body`** — replaced the wrapper `<div className={themeClass}>` pattern with `useEffect` that toggles theme class on `body`. Fixed the focus theme cascade bug where the main pane stayed cream while sidebar correctly turned dark. Plus `color-scheme: dark` on `.theme-focus` so native widgets match.
 2. **Recent-activity sort in sidebar** — client-only `last_activity_at` field per session bumps on submit and on every send. Sidebar sorts desc + groups by `relativeDate(last_activity_at)`. In-memory only (V1 trade-off).
 3. **Archive + delete sessions** — hover-revealed action buttons per row, status-aware: failed → Trash; ready → Archive (collapsible "Archived (N)" section at sidebar bottom); archived → Restore + Trash (delete forever). `<button>` rows refactored to `<div role="button">` to legally nest action buttons. New API helpers `archiveJob`, `deleteJob`. Three new icons: Archive, Restore, Trash.
+4. **Landing-page hero redesign** (2026-05-10, branch `ui/hero-landing-page`) — replaced the tiny placeholder empty-state with an inviting hero: green "Ready when you are" pill → two-tone serif H1 ("What would you like / **to learn today?**") → green-ringed YouTube input bar with **Start →** → "Upload a file · Paste a transcript" link chips → 2×2 decorative suggestion cards ("Once it's indexed, try asking…") → 2 recent-ready session cards with `mm:ss · Language` ("Pick up where you left off"). Sidebar **New chat** also lands here (single canonical landing). Mode-switch chips drop into the existing `InputView` with `initialMode` preselected; eyebrow/title/sample-chips trimmed from `InputView` since the landing is the new hero. New files: `app/src/components/Landing.jsx`, `app/src/lib/validators.js` (shared `YOUTUBE_RE`). New icons: `Check`, `Target`. All `.landing-*` styles use existing CSS tokens so it themes cleanly under Scholar/Studio/Focus. Vertical paddings and title size use `clamp(min, vh, max)` and the container is `overflow: hidden` so the hero never scrolls — fits any viewport height by compressing typography and spacing. BE: `/sessions` SELECT extended to include `duration_seconds` + `detected_language`; `SessionRow` schema updated. No migration (columns already exist on the jobs table).
 
 ### Frontend — verification checklist (V1 demo-ready)
 
@@ -114,6 +115,7 @@ Stages are planning categories, not sequential implementation phases — they fo
 **Happy paths — verified ✅**
 - `POST /ingest/youtube` captions fast-path — multiple videos
 - `POST /ingest/youtube` ASR fallback via Groq Whisper
+- `POST /ingest/upload` (2026-05-10) — multipart video upload of a self-recorded clip about RAG → ffmpeg audio extraction → Groq Whisper transcription → chunk+embed → ready → grounded Q&A on the recorded content. End-to-end pipeline confirmed; closes the last unexercised ingest path.
 - Chunking → OpenAI embedding → Qdrant upsert
 - `POST /rag/query` single-turn grounded answer with citations
 - `POST /rag/query` multi-turn (turn 2 with `recent_turns`)
@@ -137,7 +139,6 @@ Stages are planning categories, not sequential implementation phases — they fo
 - CORS preflight: `OPTIONS /job/{id}/archive` and `OPTIONS /job/{id}` → 200 with proper Allow headers (after `allow_methods` extended to include PATCH + DELETE)
 
 **Pending verification ⏳**
-- `POST /ingest/upload` (multipart + ffmpeg + Groq Whisper end-to-end)
 - `POST /rag/query` against still-`pending` session → `404 invalid_session` *(shares the `get_job` status check with the verified happy path; expected to work)*
 
 **Known minor issues — deferred until after FE wiring**
@@ -156,7 +157,6 @@ The skeleton was written against older snippets in `be-plan.md`; pip pulled newe
 - **2026-05-10:** `alter table jobs add column archived boolean not null default false;` — supports the archive/delete UI per FE plan §21.3 + BE plan §27.3. Canonical CREATE TABLE in `plan/hosting/hosting.md` §6.2 also updated.
 
 ### Remaining work
-- `POST /ingest/upload` end-to-end smoke test (multipart + ffmpeg + Groq Whisper) — only ingest path not yet exercised; shares the orchestrator with the verified text + youtube paths.
 - Re-tune `MIN_SIMILARITY_SCORE` against real retrieval-score distributions before locking the demo.
 - Comprehensive UI/UX QA pass with a fresh eye now that the core demo is complete.
 

@@ -1,12 +1,12 @@
 import { Fragment, useRef, useState } from "react";
+import { YOUTUBE_RE } from "../lib/validators.js";
 import { Icon } from "./Icon.jsx";
 
-const YOUTUBE_RE = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i;
 const VIDEO_EXT_RE = /\.(mp4|mov|avi|mkv)$/i;
 const MAX_UPLOAD_BYTES = 500 * 1024 * 1024;
 
-export function InputView({ onSubmit }) {
-  const [mode, setMode] = useState("youtube");
+export function InputView({ onSubmit, initialMode = "youtube" }) {
+  const [mode, setMode] = useState(initialMode);
   const [url, setUrl] = useState("");
   const [transcript, setTranscript] = useState("");
   const [file, setFile] = useState(null);
@@ -57,28 +57,9 @@ export function InputView({ onSubmit }) {
     setFile(f);
   };
 
-  const exampleClick = (kind) => {
-    setError("");
-    if (kind === "yt") {
-      setMode("youtube");
-      setUrl("https://www.youtube.com/watch?v=PFDu9oVAE-g");
-    } else if (kind === "tr") {
-      setMode("transcript");
-      setTranscript(
-        "Welcome back, everyone. Today we're going to talk about eigenvalues and eigenvectors — probably the single most important idea in linear algebra after the matrix itself. The intuition I want you to leave with is this: when a matrix acts on a vector, most vectors get rotated and stretched. But for any square matrix, there are a few special directions where the matrix only stretches — it doesn't rotate. Those directions are the eigenvectors, and the amount of stretch is the eigenvalue…",
-      );
-    }
-  };
-
   return (
     <div className="center">
       <div className="center-inner">
-        <div className="h-eyebrow">New session</div>
-        <h1 className="h-title serif">Drop in a lecture. Ask anything.</h1>
-        <p className="h-sub">
-          Gazelle turns any educational video or transcript into a citable, conversational tutor — grounded in exactly what was said.
-        </p>
-
         <div className="tabs" role="tablist">
           <button className={`tab ${mode === "youtube" ? "active" : ""}`} onClick={() => setMode("youtube")}>
             <Icon.YouTube /> YouTube
@@ -193,23 +174,6 @@ export function InputView({ onSubmit }) {
               <span>{error}</span>
             </div>
           )}
-        </div>
-
-        <div className="examples">
-          <button className="example" onClick={() => exampleClick("yt")}>
-            <span className="ex-mark">L</span>
-            <span>
-              <div className="ex-title">3Blue1Brown — Essence of Linear Algebra</div>
-              <div className="ex-meta">YouTube · try a sample lecture</div>
-            </span>
-          </button>
-          <button className="example" onClick={() => exampleClick("tr")}>
-            <span className="ex-mark">T</span>
-            <span>
-              <div className="ex-title">Eigenvalues — Lecture transcript</div>
-              <div className="ex-meta">Transcript · paste & try</div>
-            </span>
-          </button>
         </div>
       </div>
     </div>

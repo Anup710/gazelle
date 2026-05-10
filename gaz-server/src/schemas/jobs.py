@@ -40,6 +40,8 @@ class SessionRow(BaseModel):
     status: JobStatus
     archived: bool = False
     created_at: str
+    duration_seconds: Optional[int] = None
+    detected_language: Optional[str] = None
 
 
 class SessionsResponse(BaseModel):
