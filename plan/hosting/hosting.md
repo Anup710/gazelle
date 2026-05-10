@@ -361,7 +361,36 @@ You should see them listed as ignored. If not, **stop and fix**, then `git rm --
 
 ## 10. Step 6 — Deploy Backend to Render
 
-### 10.1 Create the web service
+### 10.1 Add a Dockerfile (one-time)
+
+The backend shells out to the **`ffmpeg`** system binary in two places: `services/ffmpeg_audio.py` (audio extraction from uploads) and indirectly via `yt-dlp` (muxing YouTube streams). Render's Native Python runtime does **not** include ffmpeg, and its build environment runs as a non-root user — so an `apt-get install` Build Command will fail. Render's official guidance for system packages is **use Docker**.
+
+A small Dockerfile solves it permanently. Create `gaz-server/Dockerfile`:
+
+```dockerfile
+FROM python:3.11-slim
+
+# System deps: ffmpeg (audio extraction + yt-dlp muxing), ca-certificates (TLS to Supabase/OpenAI/Qdrant)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python deps first so Docker layer-caches them across code changes
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy source
+COPY . .
+
+# Render injects $PORT at runtime; bind to 0.0.0.0 so the container is reachable
+CMD ["sh", "-c", "uvicorn src.main:app --host 0.0.0.0 --port $PORT"]
+```
+
+> 💡 Once you're on Docker, `runtime.txt` is no longer used by Render — the Python version is pinned by `FROM python:3.11-slim` in the Dockerfile. You can leave `runtime.txt` in the repo for local-tooling reference or delete it; either is fine.
+
+### 10.2 Create the web service
 
 1. Sign in at https://render.com → **"New +" → "Web Service"**.
 2. Connect your GitHub account, select the `gazelle` repo.
@@ -373,14 +402,16 @@ You should see them listed as ignored. If not, **stop and fix**, then `git rm --
 | **Region** | Match your Supabase / Qdrant region |
 | **Branch** | `main` |
 | **Root Directory** | `gaz-server` |
-| **Runtime** | Python 3 |
-| **Build Command** | `pip install -r requirements.txt` |
-| **Start Command** | `uvicorn src.main:app --host 0.0.0.0 --port $PORT` |
+| **Runtime** | **Docker** |
+| **Dockerfile Path** | `./Dockerfile` *(default — relative to Root Directory)* |
+| **Health Check Path** | `/sessions` |
 | **Plan** | Free |
 
-> ⚠ **Important:** Render's free tier spins down after 15 min of no traffic. The first request after spin-down takes 30–60 sec to wake up. The frontend handles this gracefully but expect it during your demo.
+> ⚠ **Important:** Render's free tier spins down after 15 min of no traffic. The first request after spin-down takes 30–60 sec to wake up. The frontend handles this gracefully but expect it during your demo. Free Web Services are also capped at **~750 hours/month per workspace** — fine for one always-on service, worth knowing if you spin up a second.
 
-### 10.2 Add environment variables
+> 💡 The **Health Check Path** tells Render to GET `/sessions` after each deploy and only mark the service "live" if it returns 200. A bad config or missing env var fails the deploy loudly instead of going live and 500ing every request.
+
+### 10.3 Add environment variables
 
 Scroll down to **"Environment Variables"** and add **the same keys from your local `gaz-server/.env`** — but **leave `ALLOWED_ORIGINS` blank for now**, you'll fill it in at Step 13 once you know the Vercel URL.
 
@@ -393,17 +424,16 @@ Scroll down to **"Environment Variables"** and add **the same keys from your loc
 | `QDRANT_URL` | your cluster URL |
 | `QDRANT_API_KEY` | your key |
 | `ALLOWED_ORIGINS` | *(leave blank for now)* |
-| `PYTHON_VERSION` | `3.11.9` |
 
-> 💡 The `PYTHON_VERSION` env var pins the Python runtime; without it Render picks a default that may not match your local version.
+> 💡 No `PYTHON_VERSION` needed — the Dockerfile's `FROM python:3.11-slim` pins it.
 
-### 10.3 Deploy
+### 10.4 Deploy
 
-Click **"Create Web Service"**. Render starts building. Watch the **Logs** tab. First deploy takes ~3–5 minutes.
+Click **"Create Web Service"**. Render starts building. Watch the **Logs** tab. First Docker build takes ~4–6 minutes (apt + pip); subsequent builds are faster thanks to layer caching.
 
-When you see `Uvicorn running on http://0.0.0.0:10000` (or similar), you're live.
+When you see `Uvicorn running on http://0.0.0.0:10000` (or similar) and the health check at `/sessions` passes, you're live.
 
-### 10.4 Note your backend URL
+### 10.5 Note your backend URL
 
 Render gives you a URL like `https://gazelle-backend.onrender.com`. **Save this** — the frontend needs it.
 
@@ -525,7 +555,7 @@ origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.s
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
 ```
@@ -536,6 +566,7 @@ app.add_middleware(
 
 Visit your Vercel URL. Run through the full flow:
 
+- [ ] **Landing page renders** → primary CTA ("New chat" / "Start a session") transitions to the input view.
 - [ ] Sidebar loads (empty is fine on first visit).
 - [ ] Click "New chat" → paste a 5–10 minute YouTube URL → submit.
 - [ ] Processing view advances through stages (this hits Render → Groq → Supabase → OpenAI → Qdrant in sequence).
@@ -545,6 +576,8 @@ Visit your Vercel URL. Run through the full flow:
 - [ ] Click TTS speaker → audio plays.
 - [ ] Refresh the page → session is still in the sidebar (chat history is empty by V1 design).
 - [ ] Try voice input (mic button) → text appears in textarea.
+- [ ] **Archive a session** (sidebar action) → it leaves the active list; reappears under archived.
+- [ ] **Delete a session** → it disappears entirely; refresh confirms it's gone from Supabase too.
 
 If all green, you're shipped. 🦌
 
@@ -563,8 +596,9 @@ The single source of confusion for first-timers. Here's everything in one table.
 | `QDRANT_URL` | `gaz-server/.env` | ✅ | — | Vector DB cluster URL |
 | `QDRANT_API_KEY` | `gaz-server/.env` | ✅ | — | Qdrant auth |
 | `ALLOWED_ORIGINS` | `gaz-server/.env` | ✅ | — | CORS allow-list (frontend URLs) |
-| `PYTHON_VERSION` | — | ✅ | — | Pin Render runtime (`3.11.9`) |
 | `VITE_API_BASE_URL` | `app/.env` | — | ✅ | Frontend → backend URL |
+
+> 💡 No `PYTHON_VERSION` env var — under the Docker runtime (§10.1), Python is pinned by the Dockerfile's base image.
 
 **Rules of thumb:**
 - Anything starting with `VITE_` → frontend, lives in `app/.env` and Vercel only.
@@ -582,6 +616,9 @@ The single source of confusion for first-timers. Here's everything in one table.
 ### Backend works locally but 500s on Render
 - Almost always a missing env var. Check Render → Environment tab.
 - Check Render → Logs for the actual exception.
+
+### Upload works locally but 500s on Render with `[Errno 2] No such file or directory: 'ffmpeg'`
+- The service is on Render's Native Python runtime instead of Docker. Native Python has no ffmpeg. Switch the service to **Docker** runtime per §10.1–10.2 (or recreate it).
 
 ### Render free tier "is taking forever to respond"
 - It's probably waking up from sleep. First request after 15 min idle takes 30–60s. Subsequent requests are fast.
@@ -671,8 +708,9 @@ Print this. Tick as you go.
 - [ ] `gaz-server/.env` populated; `uvicorn src.main:app` runs locally; `/sessions` returns `{"sessions": []}`
 - [ ] `app/.env` populated; `npm run dev` runs; can submit a job end-to-end locally
 - [ ] `.gitignore` excludes both `.env` files
+- [ ] `gaz-server/Dockerfile` committed (Python 3.11-slim + ffmpeg)
 - [ ] Code pushed to GitHub
-- [ ] Render web service created, root dir = `gaz-server`, all env vars set, deploys green
+- [ ] Render web service created, runtime = **Docker**, root dir = `gaz-server`, health check path = `/sessions`, all env vars set, deploys green
 - [ ] Render URL noted
 - [ ] Vercel project created, root dir = `app`, `VITE_API_BASE_URL` set to Render URL, deploys green
 - [ ] Vercel URL added to `ALLOWED_ORIGINS` on Render
