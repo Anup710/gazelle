@@ -24,6 +24,7 @@ Stages are planning categories, not sequential implementation phases — they fo
 - **Job status enum:** `pending → transcribing → validating → embedding → ready → failed`
 - **Chunking:** Semantic, 400–600 tokens, 10–20% overlap, timestamps preserved
 - **Speaker metadata:** `speaker_set` (array) throughout the pipeline
+- **Citation payload:** Each citation includes verbatim chunk `text` (alongside timestamps, relevance, speaker_set) so the frontend popover can show exact source content — zero extra retrieval cost since chunks are already in memory at response time
 - **Retrieval isolation:** All queries scoped to a single session — no cross-session mixing
 - **Content gate:** LLM classifier rejects non-educational content before processing
 - **Languages:** English + Hindi, auto-detection
