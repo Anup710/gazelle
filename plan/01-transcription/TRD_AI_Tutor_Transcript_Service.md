@@ -42,10 +42,9 @@ Educational Validation
 | API Framework | FastAPI |
 | Hosting | Render or Railway |
 | Database | Supabase Postgres |
-| ASR Engine | Groq Whisper API |
-| YouTube Extraction | yt-dlp |
-| Native Captions | youtube-transcript-api |
-| Audio Processing | FFmpeg |
+| ASR Engine | Groq Whisper API (uploads only) |
+| YouTube Transcript | Supadata HTTP API (native + AI-generated handled server-side) |
+| Audio Processing | FFmpeg (uploads only) |
 | Async Processing | FastAPI BackgroundTasks (initially) |
 
 ---
@@ -61,10 +60,14 @@ YouTube URL
     ↓
 Validate URL
     ↓
-Try Native Captions
+Supadata /v1/youtube/transcript
     ↓
-Fallback to ASR if unavailable
+Segments (start/end/text) + lang
 ```
+
+Supadata returns native captions when available and AI-generated when not — we don't
+maintain a separate fallback branch. Title comes from a best-effort YouTube oEmbed call;
+duration is derived from the last segment's end time.
 
 ### Validation Rules
 
@@ -111,21 +114,21 @@ ASR
 
 # 5. Transcription Strategy
 
-## 5.1 Caption-First Strategy
+## 5.1 YouTube — Supadata
 
-### YouTube Processing Priority
-
-```text
-Try Native Captions
-        ↓
-If unavailable:
-Run ASR
-```
+YouTube transcription is a single HTTP call to Supadata. Supadata internally prefers native
+captions and falls back to AI-generated transcription; both paths return the same response
+shape with timestamped segments.
 
 ### Reasoning
-- Lower latency
-- Lower cost
-- Native captions are common for educational content
+- Avoids YouTube bot-walling on datacenter IPs (yt-dlp's failure mode in production)
+- Eliminates cookie-rotation operational burden
+- One vendor, one code path, native + generated covered
+
+## 5.2 Uploads — Groq Whisper
+
+Uploaded video files still go through FFmpeg audio extraction → Groq Whisper ASR. This
+path doesn't touch YouTube and isn't affected by the Supadata swap.
 
 ---
 
