@@ -46,6 +46,11 @@ def _writable_cookies_path() -> str | None:
     except OSError as e:
         log.warning("youtube.cookies_copy_failed", extra={"src": src, "err": str(e)})
         return None
+    try:
+        size = os.path.getsize(dst)
+    except OSError:
+        size = -1
+    log.info("youtube.cookies_loaded", extra={"src": src, "dst": dst, "bytes": size})
     return dst
 
 
@@ -64,10 +69,34 @@ def _common_yt_opts() -> dict:
 
 def _get_metadata(url: str) -> dict:
     opts = {**_common_yt_opts(), "skip_download": True}
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        # process=False skips format selection — we only need title/duration here.
-        info = ydl.extract_info(url, download=False, process=False)
-    return info or {}
+    log.info(
+        "youtube.metadata.start",
+        extra={
+            "url": url,
+            "player_clients": _YT_EXTRACTOR_ARGS["youtube"]["player_client"],
+            "has_cookies": "cookiefile" in opts,
+        },
+    )
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            # process=False skips format selection — we only need title/duration here.
+            info = ydl.extract_info(url, download=False, process=False)
+    except Exception as e:
+        log.warning(
+            "youtube.metadata.failed",
+            extra={"url": url, "err_type": type(e).__name__, "err": str(e)[:400]},
+        )
+        raise
+    info = info or {}
+    log.info(
+        "youtube.metadata.ok",
+        extra={
+            "url": url,
+            "title": (info.get("title") or "")[:80],
+            "duration": info.get("duration"),
+        },
+    )
+    return info
 
 
 def _download_audio(url: str, video_id: str) -> str:
@@ -84,17 +113,39 @@ def _download_audio(url: str, video_id: str) -> str:
             }
         ],
     }
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        ydl.download([url])
+    log.info(
+        "youtube.download.start",
+        extra={
+            "video_id": video_id,
+            "player_clients": _YT_EXTRACTOR_ARGS["youtube"]["player_client"],
+            "has_cookies": "cookiefile" in opts,
+        },
+    )
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.download([url])
+    except Exception as e:
+        log.warning(
+            "youtube.download.failed",
+            extra={"video_id": video_id, "err_type": type(e).__name__, "err": str(e)[:400]},
+        )
+        raise
     expected = os.path.join(tempfile.gettempdir(), f"gazelle_{video_id}.mp3")
     if not os.path.exists(expected):
+        log.warning("youtube.download.no_file", extra={"video_id": video_id, "expected": expected})
         raise TranscriptionError("Audio download failed")
+    try:
+        file_bytes = os.path.getsize(expected)
+    except OSError:
+        file_bytes = -1
+    log.info("youtube.download.ok", extra={"video_id": video_id, "bytes": file_bytes})
     return expected
 
 
 async def transcribe_youtube(url: str) -> tuple[dict, IngestMeta]:
     video_id = extract_video_id(url)
     canonical = canonical_watch_url(video_id)
+    log.info("youtube.ingest.start", extra={"url": url, "video_id": video_id})
 
     # Metadata + captions in parallel — both are independent network calls.
     info_task = asyncio.to_thread(_get_metadata, canonical)
