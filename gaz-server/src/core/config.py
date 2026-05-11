@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     # Logging
     LOG_LEVEL: str = "INFO"
 
+    # Path to a Netscape-format YouTube cookies file (used by yt-dlp to bypass
+    # bot detection on datacenter IPs). Set this on Render via a Secret File.
+    # Leave unset locally — residential IPs don't get bot-walled.
+    YOUTUBE_COOKIES_FILE: str | None = None
+
 
 @lru_cache
 def settings() -> Settings:

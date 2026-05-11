@@ -7,6 +7,7 @@ import tempfile
 
 import yt_dlp
 
+from ...core.config import settings
 from ...core.errors import TranscriptionError
 from ...utils.titles import title_from_youtube
 from ...utils.youtube_url import canonical_watch_url, extract_video_id
@@ -21,13 +22,24 @@ log = logging.getLogger(__name__)
 _YT_EXTRACTOR_ARGS = {"youtube": {"player_client": ["tv_embedded", "web_safari", "mweb"]}}
 
 
-def _get_metadata(url: str) -> dict:
-    opts = {
-        "skip_download": True,
+def _common_yt_opts() -> dict:
+    """Shared yt-dlp opts: player-client fallbacks + cookies file when configured."""
+    opts: dict = {
         "quiet": True,
         "no_warnings": True,
         "extractor_args": _YT_EXTRACTOR_ARGS,
     }
+    cookies_path = settings().YOUTUBE_COOKIES_FILE
+    if cookies_path:
+        if os.path.exists(cookies_path):
+            opts["cookiefile"] = cookies_path
+        else:
+            log.warning("youtube.cookies_file_missing", extra={"path": cookies_path})
+    return opts
+
+
+def _get_metadata(url: str) -> dict:
+    opts = {**_common_yt_opts(), "skip_download": True}
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
     return info or {}
@@ -36,11 +48,9 @@ def _get_metadata(url: str) -> dict:
 def _download_audio(url: str, video_id: str) -> str:
     out_template = os.path.join(tempfile.gettempdir(), f"gazelle_{video_id}.%(ext)s")
     opts = {
+        **_common_yt_opts(),
         "format": "bestaudio/best",
         "outtmpl": out_template,
-        "quiet": True,
-        "no_warnings": True,
-        "extractor_args": _YT_EXTRACTOR_ARGS,
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
