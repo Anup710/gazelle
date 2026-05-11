@@ -35,7 +35,7 @@ async def ingest_youtube(req: IngestYouTubeRequest, bg: BackgroundTasks) -> Inge
     job_id = jobs_repo.create_job(
         source_type="youtube",
         source=canonical,
-        title=canonical,  # optimistic; replaced after yt-dlp metadata fetch
+        title=canonical,  # optimistic; replaced after Supadata + oEmbed lookup
     )
     bg.add_task(run_ingest_job, job_id, "youtube", {"url": canonical})
     log.info("ingest.queued", extra={"job_id": job_id, "source_type": "youtube"})

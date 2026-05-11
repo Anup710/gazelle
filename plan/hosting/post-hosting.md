@@ -183,72 +183,35 @@ If any of these fail, check Render Logs first. 90% of demo-day failures are: (a)
 
 ---
 
-## 10. The YouTube bot-wall incident (2026-05-11) — what to remember
+## 10. YouTube transcript extraction — Supadata (replaces yt-dlp, 2026-05-11)
 
-**Symptom:** YouTube ingest jobs fail on Render (works fine locally). Render logs show:
+**Why this changed.** The original implementation called YouTube directly from Render via `yt-dlp` + `youtube-transcript-api`. YouTube aggressively bot-walls datacenter IPs, which forced a Netscape-format cookies file uploaded as a Render Secret File. Cookies rotated, the path was fiddly, and ingest jobs kept failing. We moved YouTube transcript extraction to **Supadata** — a hosted API that takes a YouTube URL and returns a timestamped transcript, choosing native captions when present and AI-generating otherwise.
 
-```
-ERROR: [youtube] <video_id>: Sign in to confirm you're not a bot.
-Use --cookies-from-browser or --cookies for the authentication.
-```
+The new code path is `gaz-server/src/pipeline/transcription/youtube.py` → `_supadata_transcript()` → one `GET https://api.supadata.ai/v1/youtube/transcript`. No cookies, no `yt-dlp`, no audio download for the YouTube branch.
 
-…and the orchestrator logs `ingest.unknown_failure` for the job. Local dev keeps working because residential IPs aren't on YouTube's watchlist.
+### 10.1 Runbook — provisioning the Supadata key on Render
 
-**Cause:** YouTube aggressively bot-walls requests from cloud provider IP ranges (Render, AWS, GCP, Fly, etc.). Anonymous datacenter requests look exactly like scrapers to YouTube's anti-abuse systems.
+1. Sign in at https://supadata.ai → dashboard → **API Keys** → copy the key.
+2. Render dashboard → backend service → **Environment** → **Environment Variables** → **Add**.
+   - **Key:** `SUPADATA_API_KEY`
+   - **Value:** the key from step 1
+   - Save. Render restarts the container automatically (~30 sec).
+3. Submit a YouTube URL through the FE. Watch Render logs — you should see `supadata.request.start` then `supadata.request.ok`, and the job should transition `pending → transcribing → validating → embedding → ready`.
 
-**Fix — two layers, in order:**
+### 10.2 When the key needs rotating
 
-1. **Player-client fallbacks (cheap, may help).** Tell yt-dlp to impersonate less-scrutinized YouTube clients in `gaz-server/src/pipeline/transcription/youtube.py`:
-   ```python
-   _YT_EXTRACTOR_ARGS = {"youtube": {"player_client": ["tv_embedded", "web_safari", "mweb"]}}
-   ```
-   Sometimes enough on its own. Often not.
-
-2. **Cookies (the real fix).** Hand the backend a copy of your logged-in YouTube session. yt-dlp attaches the cookies to every request and YouTube treats it as a real user.
-
-The code reads the cookies path from `settings.YOUTUBE_COOKIES_FILE`. If the env var is set and the file exists, yt-dlp uses it; otherwise it falls back to just the player-client trick (so local dev with no cookies file still works fine).
-
-`captions.py` uses `youtube-transcript-api`, a separate code path that doesn't hit the same wall — leave it alone.
-
-### 10.1 Runbook — uploading cookies to Render
-
-Cookies are sensitive (they grant access to your YouTube account). Never commit them, never put them in plain env vars where they'd show in build logs. Use Render's **Secret Files** feature instead.
-
-1. **Export cookies from your browser.**
-   - Install a browser extension that exports cookies in Netscape format. Recommended: **"Get cookies.txt LOCALLY"** (Chrome) or **"cookies.txt"** (Firefox). Pick one with strong reviews — avoid sketchy ones, you're handing it access to your cookies.
-   - Open `https://www.youtube.com` in a tab where you're **logged in**.
-   - Click the extension icon → **Export** (or **Download**) → it gives you a `youtube.com_cookies.txt` (or similar) file. Save it somewhere you can find it.
-   - Open the file in a text editor and sanity check: it should start with `# Netscape HTTP Cookie File` and contain lines with `.youtube.com` and tokens like `LOGIN_INFO`, `SID`, `SAPISID`, `HSID`.
-
-2. **Upload as a Render Secret File.**
-   - Render dashboard → backend service → left sidebar → **Environment** → scroll to **Secret Files** section → **Add Secret File**.
-   - **Filename:** `youtube_cookies.txt`
-   - **File Contents:** paste the entire contents of the exported file (or use the upload button).
-   - Save. Render mounts it at `/etc/secrets/youtube_cookies.txt` inside the container.
-
-3. **Add the env var that points to it.**
-   - Same Environment page → **Environment Variables** → **Add**.
-   - **Key:** `YOUTUBE_COOKIES_FILE`
-   - **Value:** `/etc/secrets/youtube_cookies.txt`
-   - Save.
-
-4. **Redeploy.** Render auto-restarts the container after env changes (~30 sec). The new env var is now in scope, the file is on disk, and yt-dlp will pick it up on the next ingest. If a restart didn't happen automatically (rare), trigger **Manual Deploy → Deploy latest commit**.
-
-5. **Verify.** Submit a YouTube URL through the FE. Watch Render Logs — you should NOT see `Sign in to confirm`. You should see `youtube.captions_used` (captions path) or audio-download progress (ASR path). If you see `youtube.cookies_file_missing` in the logs, the path in the env var doesn't match where Render actually mounted the file — re-check step 3.
-
-### 10.2 When cookies expire
-
-YouTube session cookies typically last weeks to a few months, then YouTube invalidates them and you'll start seeing `Sign in to confirm` again. **The fix is a re-upload, not a code change:**
-
-1. Re-export from your browser (same extension, same flow).
-2. Render dashboard → Secret Files → click the existing `youtube_cookies.txt` → **Update / Edit** → paste new contents → Save.
-3. Render restarts the container. Done.
-
-No commit, no redeploy from git, no code touched.
+Same flow: dashboard → revoke old, mint new → paste into Render's env var → save → container restarts. No commit, no redeploy from git.
 
 ### 10.3 Diagnostic shortcut
 
-If a future YouTube failure surfaces as `ingest.unknown_failure`:
-- Grep Render logs for `Sign in to confirm` → cookies are gone/expired → re-upload (§10.2).
-- Grep for `youtube.cookies_file_missing` → `YOUTUBE_COOKIES_FILE` is set but file isn't where it claims to be → check the env var path matches the Secret File mount.
-- Neither shows up → not a bot-wall issue, dig elsewhere.
+If a YouTube ingest fails as `transcription_failed`:
+- Grep Render logs for `supadata.request.http_error` → status code + error code show what Supadata returned (`transcript-unavailable`, `limit-exceeded`, `unauthorized`, etc.).
+- Grep for `supadata.request.failed` → network error reaching Supadata.
+- `SUPADATA_API_KEY not configured` → env var missing on Render. Set it per §10.1.
+
+### 10.4 Cleanup notes (what to delete on Render)
+
+If migrating from the old cookies-based setup:
+- Remove the `YOUTUBE_COOKIES_FILE` env var.
+- Delete the `youtube_cookies.txt` Secret File mount.
+- No Dockerfile change is required — the `ffmpeg` apt install stays for the upload path.

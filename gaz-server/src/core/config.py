@@ -32,10 +32,10 @@ class Settings(BaseSettings):
     # Logging
     LOG_LEVEL: str = "INFO"
 
-    # Path to a Netscape-format YouTube cookies file (used by yt-dlp to bypass
-    # bot detection on datacenter IPs). Set this on Render via a Secret File.
-    # Leave unset locally — residential IPs don't get bot-walled.
-    YOUTUBE_COOKIES_FILE: str | None = None
+    # Supadata: YouTube transcript extraction (replaces yt-dlp + youtube-transcript-api).
+    # Required at job time only; missing key surfaces as `transcription_failed`, not boot failure.
+    SUPADATA_API_KEY: str = ""
+    SUPADATA_BASE_URL: str = "https://api.supadata.ai"
 
 
 @lru_cache

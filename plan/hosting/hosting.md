@@ -366,14 +366,14 @@ You should see them listed as ignored. If not, **stop and fix**, then `git rm --
 
 ### 10.1 Add a Dockerfile (one-time)
 
-The backend shells out to the **`ffmpeg`** system binary in two places: `services/ffmpeg_audio.py` (audio extraction from uploads) and indirectly via `yt-dlp` (muxing YouTube streams). Render's Native Python runtime does **not** include ffmpeg, and its build environment runs as a non-root user — so an `apt-get install` Build Command will fail. Render's official guidance for system packages is **use Docker**.
+The backend shells out to the **`ffmpeg`** system binary for audio extraction from uploaded videos (`services/ffmpeg_audio.py`). Render's Native Python runtime does **not** include ffmpeg, and its build environment runs as a non-root user — so an `apt-get install` Build Command will fail. Render's official guidance for system packages is **use Docker**. (The YouTube path now goes through Supadata over HTTP and no longer needs ffmpeg.)
 
 A small Dockerfile solves it permanently. Create `gaz-server/Dockerfile`:
 
 ```dockerfile
 FROM python:3.11-slim
 
-# System deps: ffmpeg (audio extraction + yt-dlp muxing), ca-certificates (TLS to Supabase/OpenAI/Qdrant)
+# System deps: ffmpeg (audio extraction for uploads), ca-certificates (TLS to Supabase/OpenAI/Qdrant)
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
     && rm -rf /var/lib/apt/lists/*

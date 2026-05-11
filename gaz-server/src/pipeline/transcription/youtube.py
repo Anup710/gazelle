@@ -1,178 +1,155 @@
-"""Top-level YouTube transcription. Caption-first → ASR fallback per stage 0 TRD §5."""
+"""YouTube transcription via Supadata. One HTTP call, native-or-AI-generated handled server-side.
 
-import asyncio
+Why Supadata: yt-dlp + youtube-transcript-api both hit YouTube directly from our datacenter IP,
+which YouTube increasingly bot-walls. Supadata abstracts that away and returns a transcript
+regardless of whether native captions exist.
+"""
+
 import logging
-import os
-import shutil
-import tempfile
-from functools import lru_cache
+from typing import Optional
 
-import yt_dlp
+import httpx
 
 from ...core.config import settings
 from ...core.errors import TranscriptionError
 from ...utils.titles import title_from_youtube
 from ...utils.youtube_url import canonical_watch_url, extract_video_id
 from ..types import IngestMeta
-from .asr import asr_transcribe
-from .captions import fetch_captions
 
 log = logging.getLogger(__name__)
 
-# YouTube's bot detection aggressively flags datacenter IPs on the default `web` client.
-# Falling back through TV-embedded → Safari → mobile web tends to slip past it.
-_YT_EXTRACTOR_ARGS = {"youtube": {"player_client": ["tv_embedded", "web_safari", "mweb"]}}
+_TRANSCRIPT_TIMEOUT_SECONDS = 300.0
+_OEMBED_TIMEOUT_SECONDS = 5.0
 
 
-@lru_cache(maxsize=1)
-def _writable_cookies_path() -> str | None:
-    """Copy the cookies secret to a writable temp path so yt-dlp can save back to it.
+async def _supadata_transcript(url: str) -> dict:
+    """Call Supadata /v1/youtube/transcript. Returns parsed JSON or raises TranscriptionError."""
+    cfg = settings()
+    if not cfg.SUPADATA_API_KEY:
+        raise TranscriptionError("SUPADATA_API_KEY not configured")
 
-    yt-dlp's `cookiefile` is read+write; on Render's read-only /etc/secrets mount,
-    cookie write-back on close raises OSError. We copy once on first use.
-    """
-    src = settings().YOUTUBE_COOKIES_FILE
-    if not src:
-        return None
-    if not os.path.exists(src):
-        log.warning("youtube.cookies_file_missing", extra={"path": src})
-        return None
-    dst = os.path.join(tempfile.gettempdir(), "gazelle_yt_cookies.txt")
-    tmp = dst + ".tmp"
+    endpoint = f"{cfg.SUPADATA_BASE_URL.rstrip('/')}/v1/youtube/transcript"
+    params = {"url": url, "text": "false"}
+    headers = {"x-api-key": cfg.SUPADATA_API_KEY}
+
+    log.info("supadata.request.start", extra={"url": url})
     try:
-        # copyfile (not copy2): don't preserve the readonly mode bits of the secret mount.
-        shutil.copyfile(src, tmp)
-        os.replace(tmp, dst)
-    except OSError as e:
-        log.warning("youtube.cookies_copy_failed", extra={"src": src, "err": str(e)})
-        return None
-    try:
-        size = os.path.getsize(dst)
-    except OSError:
-        size = -1
-    log.info("youtube.cookies_loaded", extra={"src": src, "dst": dst, "bytes": size})
-    return dst
-
-
-def _common_yt_opts() -> dict:
-    """Shared yt-dlp opts: player-client fallbacks + cookies file when configured."""
-    opts: dict = {
-        "quiet": True,
-        "no_warnings": True,
-        "extractor_args": _YT_EXTRACTOR_ARGS,
-    }
-    cookies_path = _writable_cookies_path()
-    if cookies_path:
-        opts["cookiefile"] = cookies_path
-    return opts
-
-
-def _get_metadata(url: str) -> dict:
-    opts = {**_common_yt_opts(), "skip_download": True}
-    log.info(
-        "youtube.metadata.start",
-        extra={
-            "url": url,
-            "player_clients": _YT_EXTRACTOR_ARGS["youtube"]["player_client"],
-            "has_cookies": "cookiefile" in opts,
-        },
-    )
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            # process=False skips format selection — we only need title/duration here.
-            info = ydl.extract_info(url, download=False, process=False)
-    except Exception as e:
+        async with httpx.AsyncClient(timeout=_TRANSCRIPT_TIMEOUT_SECONDS) as client:
+            rsp = await client.get(endpoint, params=params, headers=headers)
+    except httpx.HTTPError as e:
         log.warning(
-            "youtube.metadata.failed",
+            "supadata.request.failed",
             extra={"url": url, "err_type": type(e).__name__, "err": str(e)[:400]},
         )
-        raise
-    info = info or {}
+        raise TranscriptionError(f"Supadata request failed: {e}") from e
+
+    if rsp.status_code >= 400:
+        body_preview = rsp.text[:400] if rsp.text else ""
+        log.warning(
+            "supadata.request.http_error",
+            extra={"url": url, "status": rsp.status_code, "body": body_preview},
+        )
+        # Try to surface Supadata's structured error code.
+        try:
+            err_payload = rsp.json()
+            code = err_payload.get("error") or "supadata_error"
+            msg = err_payload.get("message") or "Transcript unavailable"
+        except ValueError:
+            code, msg = "supadata_error", "Transcript unavailable"
+        raise TranscriptionError(f"{code}: {msg}")
+
+    try:
+        data = rsp.json()
+    except ValueError as e:
+        raise TranscriptionError("Supadata returned non-JSON response") from e
+
     log.info(
-        "youtube.metadata.ok",
+        "supadata.request.ok",
         extra={
             "url": url,
-            "title": (info.get("title") or "")[:80],
-            "duration": info.get("duration"),
+            "lang": data.get("lang"),
+            "segment_count": len(data.get("content") or []) if isinstance(data.get("content"), list) else 0,
         },
     )
-    return info
+    return data
 
 
-def _download_audio(url: str, video_id: str) -> str:
-    out_template = os.path.join(tempfile.gettempdir(), f"gazelle_{video_id}.%(ext)s")
-    opts = {
-        **_common_yt_opts(),
-        "format": "bestaudio/best",
-        "outtmpl": out_template,
-        "postprocessors": [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "64",
-            }
-        ],
-    }
-    log.info(
-        "youtube.download.start",
-        extra={
-            "video_id": video_id,
-            "player_clients": _YT_EXTRACTOR_ARGS["youtube"]["player_client"],
-            "has_cookies": "cookiefile" in opts,
-        },
-    )
+def _normalize_segments(payload: dict) -> list[dict]:
+    """Map Supadata's TranscriptChunk[] (offset/duration in ms) to our {start, end, text} in seconds."""
+    raw = payload.get("content")
+    if not isinstance(raw, list):
+        return []
+    segments: list[dict] = []
+    for c in raw:
+        text = (c.get("text") or "").strip()
+        if not text:
+            continue
+        offset_ms = float(c.get("offset", 0) or 0)
+        duration_ms = float(c.get("duration", 0) or 0)
+        start = offset_ms / 1000.0
+        end = start + (duration_ms / 1000.0)
+        segments.append({"start": start, "end": end, "text": text})
+    return segments
+
+
+async def _title_via_oembed(url: str) -> Optional[str]:
+    """Best-effort title lookup. Returns None on any failure — caller falls back to URL."""
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
+        async with httpx.AsyncClient(timeout=_OEMBED_TIMEOUT_SECONDS) as client:
+            rsp = await client.get(
+                "https://www.youtube.com/oembed",
+                params={"url": url, "format": "json"},
+            )
+        if rsp.status_code != 200:
+            return None
+        return (rsp.json().get("title") or "").strip() or None
     except Exception as e:
-        log.warning(
-            "youtube.download.failed",
-            extra={"video_id": video_id, "err_type": type(e).__name__, "err": str(e)[:400]},
-        )
-        raise
-    expected = os.path.join(tempfile.gettempdir(), f"gazelle_{video_id}.mp3")
-    if not os.path.exists(expected):
-        log.warning("youtube.download.no_file", extra={"video_id": video_id, "expected": expected})
-        raise TranscriptionError("Audio download failed")
-    try:
-        file_bytes = os.path.getsize(expected)
-    except OSError:
-        file_bytes = -1
-    log.info("youtube.download.ok", extra={"video_id": video_id, "bytes": file_bytes})
-    return expected
+        log.info("oembed.failed", extra={"url": url, "err": str(e)[:200]})
+        return None
 
 
 async def transcribe_youtube(url: str) -> tuple[dict, IngestMeta]:
     video_id = extract_video_id(url)
     canonical = canonical_watch_url(video_id)
-    log.info("youtube.ingest.start", extra={"url": url, "video_id": video_id})
+    log.info(
+        "youtube.ingest.start",
+        extra={"url": url, "video_id": video_id, "provider": "supadata"},
+    )
+    # Loud, unambiguous marker: this video is being routed through Supadata, not yt-dlp.
+    log.info(
+        "youtube.route.supadata",
+        extra={"video_id": video_id, "canonical_url": canonical},
+    )
 
-    # Metadata + captions in parallel — both are independent network calls.
-    info_task = asyncio.to_thread(_get_metadata, canonical)
-    captions_task = asyncio.to_thread(fetch_captions, video_id)
-    info, captions = await asyncio.gather(info_task, captions_task)
+    payload = await _supadata_transcript(canonical)
+    segments = _normalize_segments(payload)
+    if not segments:
+        raise TranscriptionError("Supadata returned an empty transcript")
 
-    title = title_from_youtube(info.get("title"), canonical)
-    duration_raw = info.get("duration")
-    duration = int(duration_raw) if duration_raw else None
-
-    if captions is not None:
-        segments, language = captions
-        used_native = True
-        log.info("youtube.captions_used", extra={"video_id": video_id, "lang": language})
-    else:
-        log.info("youtube.captions_unavailable", extra={"video_id": video_id})
-        audio_path = await asyncio.to_thread(_download_audio, canonical, video_id)
-        try:
-            segments, language = await asr_transcribe(audio_path)
-        finally:
-            try:
-                os.remove(audio_path)
-            except OSError:
-                pass
-        used_native = False
-
+    language = (payload.get("lang") or "en")[:2].lower()
     full_text = " ".join(s["text"] for s in segments).strip()
+
+    # Derive duration from segment end times — accurate enough for the UI badge.
+    max_end = max((s["end"] for s in segments), default=0.0)
+    duration = int(max_end) if max_end > 0 else None
+
+    raw_title = await _title_via_oembed(canonical)
+    title = title_from_youtube(raw_title, canonical)
+
+    # Supadata doesn't expose a native-vs-generated flag, so this stays optional.
+    used_native: Optional[bool] = None
+
+    log.info(
+        "youtube.ingest.complete",
+        extra={
+            "video_id": video_id,
+            "provider": "supadata",
+            "segment_count": len(segments),
+            "duration_seconds": duration,
+            "language": language,
+        },
+    )
+
     transcript_json = {
         "transcript": segments,
         "full_text": full_text,

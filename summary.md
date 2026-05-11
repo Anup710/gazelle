@@ -27,6 +27,7 @@ Stages are planning categories, not sequential implementation phases — they fo
 - **Citation payload:** Each citation includes verbatim chunk `text` (alongside timestamps, relevance, speaker_set) so the frontend popover can show exact source content — zero extra retrieval cost since chunks are already in memory at response time
 - **Retrieval isolation:** All queries scoped to a single session — no cross-session mixing
 - **Content gate:** LLM classifier rejects non-educational content before processing
+- **YouTube transcript provider:** Supadata HTTP API (replaces yt-dlp + youtube-transcript-api as of 2026-05-11 — datacenter IPs were getting bot-walled and the cookies workaround was operationally painful)
 - **Languages:** English + Hindi, auto-detection
 - **Generation LLM:** OpenAI GPT-4o-mini (same ecosystem as embeddings)
 - **Voice query STT:** Groq Whisper (reused from Stage 0), exposed via `POST /stt`

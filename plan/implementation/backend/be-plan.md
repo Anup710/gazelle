@@ -55,9 +55,8 @@ That is the entire scope. Authentication, server-side chat persistence, streamin
 | **`qdrant-client`** | Official, supports payload-indexed filters and batched upserts. |
 | **`openai` (>=1.x)** | Embeddings (`text-embedding-3-small`), GPT-4o-mini (augment + compact + generate), TTS (`tts-1`). One SDK, one auth. |
 | **`groq`** | Official Python SDK for Groq Whisper. Used for ingest ASR (Stage 0) and voice queries (Stage 2 `/stt`). |
-| **`yt-dlp`** | YouTube metadata + audio download. Most reliable extraction tool. |
-| **`youtube-transcript-api`** | Native-caption fast path for YouTube — saves ASR cost when captions exist. |
-| **`ffmpeg-python` + system FFmpeg** | Audio extraction from uploaded video; downsample to mono 16 kHz mp3 before sending to Groq. Render's apt buildpack ships FFmpeg. |
+| **Supadata HTTP API** | YouTube transcript extraction — native captions when available, AI-generated otherwise, in one call. Replaces `yt-dlp` + `youtube-transcript-api` to avoid YouTube's datacenter-IP bot wall on Render. Called via `httpx`. |
+| **`ffmpeg-python` + system FFmpeg** | Audio extraction from uploaded video; downsample to mono 16 kHz mp3 before sending to Groq. Render's apt buildpack ships FFmpeg. (YouTube path no longer needs ffmpeg.) |
 | **`langchain-text-splitters`** | `RecursiveCharacterTextSplitter` is the V1 chunker. Stable, sentence-aware separators, well-documented. We use it with a tiktoken length function so token targets are real. |
 | **`tiktoken`** | Token counting (`cl100k_base`) compatible with OpenAI embeddings + GPT-4o-mini. |
 | **`python-multipart`** | Required for `UploadFile` form parsing. |
@@ -79,8 +78,6 @@ openai>=1.30
 groq>=0.9
 supabase>=2.4
 qdrant-client>=1.9
-yt-dlp>=2024.3.10
-youtube-transcript-api>=0.6.2
 ffmpeg-python>=0.2.0
 langchain-text-splitters>=0.0.1
 tiktoken>=0.7
@@ -148,11 +145,10 @@ gaz-server/
     │   ├── orchestrator.py           # run_ingest_job(job_id, source_type, payload)
     │   ├── transcription/
     │   │   ├── __init__.py
-    │   │   ├── youtube.py            # yt-dlp metadata + audio path
+    │   │   ├── youtube.py            # Supadata HTTP call → segments + lang
     │   │   ├── upload.py             # save UploadFile to /tmp, extract audio
     │   │   ├── text.py               # synthesize transcript[] from raw paste
-    │   │   ├── captions.py           # youtube-transcript-api fast path
-    │   │   └── asr.py                # Groq Whisper wrapper
+    │   │   └── asr.py                # Groq Whisper wrapper (uploads only)
     │   ├── validation.py             # GPT-4o-mini educational classifier
     │   ├── chunking.py               # RecursiveCharacterTextSplitter wiring
     │   └── embedding.py              # OpenAI embeddings + Qdrant upsert
@@ -741,7 +737,7 @@ def title_from_text(text: str) -> str:
     return snippet + ("…" if len(text.strip()) > 60 else "")
 ```
 
-For YouTube, the optimistic title at ingest time is the URL itself; once `yt-dlp` resolves metadata in the background task, the row's `title` is updated. The FE refetches on `ready` and replaces the optimistic title (FE plan Seam 3 §8).
+For YouTube, the optimistic title at ingest time is the URL itself; once the Supadata call plus a best-effort YouTube oEmbed lookup resolve the real title in the background task, the row's `title` is updated. The FE refetches on `ready` and replaces the optimistic title (FE plan Seam 3 §8).
 
 ---
 
@@ -804,7 +800,7 @@ async def run_ingest_job(job_id: str, source_type: str, payload: dict) -> None:
             cleanup_temp(payload.get("temp_path"))
 ```
 
-**Async vs sync trade-off:** OpenAI/Groq SDKs ship async clients (`openai.AsyncOpenAI`, `groq.AsyncGroq`). yt-dlp and ffmpeg are sync but invoked via `asyncio.to_thread`. FastAPI's `BackgroundTasks.add_task` accepts coroutines via the workaround:
+**Async vs sync trade-off:** OpenAI/Groq SDKs ship async clients (`openai.AsyncOpenAI`, `groq.AsyncGroq`). The Supadata call goes through `httpx.AsyncClient`. ffmpeg-python is sync but invoked via `asyncio.to_thread` for the upload path. FastAPI's `BackgroundTasks.add_task` accepts coroutines via the workaround:
 
 ```python
 # routes/ingest.py
@@ -820,47 +816,22 @@ def _enqueue(bg: BackgroundTasks, coro):
 
 ### 12.1 YouTube — `pipeline/transcription/youtube.py`
 
-**Caption-first strategy** per Stage 0 TRD §5.
+**Single-call strategy** via Supadata (replaces the historic captions-first → ASR fallback chain). Supadata returns native captions when available and AI-generated otherwise, in one request.
 
-1. Validate URL via `utils/youtube_url.py` → extract `video_id`.
-2. Get metadata only (no download) via `yt_dlp.YoutubeDL({"skip_download": True, "quiet": True}).extract_info(url)`.
-   - Capture: `title`, `duration`.
-3. Try native captions:
+1. Validate URL via `utils/youtube_url.py` → extract `video_id` → build canonical `watch?v=…` URL.
+2. `GET {SUPADATA_BASE_URL}/v1/youtube/transcript?url=<canonical>&text=false` with header `x-api-key: {SUPADATA_API_KEY}`.
+3. Map Supadata's `TranscriptChunk[]` (offsets in **milliseconds**) to our segment shape (`{start, end, text}` in **seconds**):
    ```python
-   from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
-   try:
-       segments = YouTubeTranscriptApi.get_transcript(video_id, languages=["en", "hi"])
-       used_native_captions = True
-       transcript = [
-           {"start": s["start"], "end": s["start"] + s["duration"], "text": s["text"]}
-           for s in segments
-       ]
-       language = "en"  # YouTubeTranscriptApi returns the matched lang code
-   except (TranscriptsDisabled, NoTranscriptFound):
-       used_native_captions = False
-       audio_path = download_audio(url)
-       transcript, language = await asr_transcribe(audio_path)
-       cleanup(audio_path)
+   start = chunk["offset"] / 1000.0
+   end   = start + chunk["duration"] / 1000.0
    ```
-4. Build `transcript_json` per Stage 0 TRD §12 schema and `full_text = " ".join(s["text"] for s in transcript)`.
-5. Return `(transcript_json, IngestMeta(...))`.
+4. Best-effort title via YouTube oEmbed (`https://www.youtube.com/oembed?url=...&format=json`); fall back to URL if it fails.
+5. Derive `duration_seconds` from `max(segment.end)`.
+6. `used_native_captions = None` — Supadata doesn't expose a native-vs-generated flag, so we don't pretend to know.
+7. Build `transcript_json` per Stage 0 TRD §12 schema and `full_text = " ".join(s["text"] for s in transcript)`.
+8. Return `(transcript_json, IngestMeta(...))`.
 
-**Audio download (when captions unavailable):**
-
-```python
-ydl_opts = {
-    "format": "bestaudio/best",
-    "outtmpl": "/tmp/%(id)s.%(ext)s",
-    "postprocessors": [{
-        "key": "FFmpegExtractAudio",
-        "preferredcodec": "mp3",
-        "preferredquality": "64",
-    }],
-    "quiet": True,
-}
-```
-
-Mono downsample is handled by `services/ffmpeg_audio.py` if needed.
+On Supadata 4xx/5xx → raise `TranscriptionError(f"{code}: {message}")` for the orchestrator to catch as `transcription_failed`.
 
 ### 12.2 Upload — `pipeline/transcription/upload.py`
 
@@ -925,7 +896,7 @@ async def asr_transcribe(audio_path: str) -> tuple[list[dict], str]:
     return segments, language
 ```
 
-> **Why the name→ISO mapping (not `rsp.language[:2]`):** Groq's `verbose_json` returns the language *name* (`"english"`, `"hindi"`), not an ISO code. Slicing to 2 chars happens to work for English/Hindi by coincidence and produces wrong codes for other languages (e.g. `"spanish"[:2] = "sp"`, real ISO is `"es"`). The captions path already returns lowercase ISO codes from `youtube-transcript-api` — both paths must match so `detected_language` is consistent across rows.
+> **Why the name→ISO mapping (not `rsp.language[:2]`):** Groq's `verbose_json` returns the language *name* (`"english"`, `"hindi"`), not an ISO code. Slicing to 2 chars happens to work for English/Hindi by coincidence and produces wrong codes for other languages (e.g. `"spanish"[:2] = "sp"`, real ISO is `"es"`). The YouTube path returns ISO codes from Supadata directly — both paths must match so `detected_language` is consistent across rows.
 
 If Groq returns 4xx/5xx → raise `TranscriptionError("ASR transcription failed")` for the orchestrator to catch.
 

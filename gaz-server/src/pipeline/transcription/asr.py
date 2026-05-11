@@ -12,12 +12,12 @@ def _seg(obj, name):
 
 
 # Groq Whisper returns the language *name* (e.g. "english"), not the ISO code.
-# Map to lowercase ISO 639-1 to match captions-path output. V1 targets en + hi.
+# Map to lowercase ISO 639-1 so detected_language is consistent across sources. V1 targets en + hi.
 _NAME_TO_ISO = {"english": "en", "hindi": "hi"}
 
 
 async def asr_transcribe(audio_path: str) -> tuple[list[dict], str]:
-    """Returns (segments, lang_code). segments shape matches captions.fetch_captions output."""
+    """Returns (segments, lang_code). segments shape: [{start, end, text}, ...]."""
     with open(audio_path, "rb") as f:
         audio_bytes = f.read()
     try:
