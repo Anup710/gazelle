@@ -23,17 +23,24 @@ def _build_user(query_text: str, summary: Optional[str], recent: list[Turn]) -> 
     return "\n".join(lines)
 
 
+_VALID_QUERY_TYPES = ("summary", "thematic", "detail")
+
+
 async def augment_query(
     query_text: str,
     conversation_summary: Optional[str],
     recent_turns: list[Turn],
 ) -> dict:
-    """Returns {'augmented_query': str, 'query_language': 'english'|'hindi'|'hinglish'}."""
+    """Returns {'augmented_query': str, 'query_language': str, 'query_type': str}.
+
+    query_type ∈ {'summary', 'thematic', 'detail'}. Defaults to 'detail' on any
+    parse/validation failure so the existing retrieval path remains the safe fallback.
+    """
     user_msg = _build_user(query_text, conversation_summary, recent_turns)
     rsp = await openai_client.get().chat.completions.create(
         model=settings().GEN_MODEL,
         temperature=0.2,
-        max_tokens=160,
+        max_tokens=200,
         response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": AUGMENT_SYSTEM_PROMPT},
@@ -51,4 +58,7 @@ async def augment_query(
     lang = (parsed.get("query_language") or "english").strip().lower()
     if lang not in ("english", "hindi", "hinglish"):
         lang = "english"
-    return {"augmented_query": augmented, "query_language": lang}
+    qtype = (parsed.get("query_type") or "detail").strip().lower()
+    if qtype not in _VALID_QUERY_TYPES:
+        qtype = "detail"
+    return {"augmented_query": augmented, "query_language": lang, "query_type": qtype}
