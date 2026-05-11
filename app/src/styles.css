@@ -1224,6 +1224,50 @@ input, textarea { font-family: inherit; color: inherit; }
   background: var(--bg);
 }
 
+/* YouTube preview: clickable thumbnail in chat header + embed modal */
+.chat-head .ch-thumb.yt {
+  padding: 0;
+  border: 1px solid var(--line);
+  cursor: pointer;
+  background: var(--bg-elev);
+}
+.chat-head .ch-thumb.yt::after { content: none; }
+.chat-head .ch-thumb.yt img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.chat-head .ch-thumb.yt .ch-play {
+  position: absolute; inset: 0;
+  display: grid; place-items: center;
+  color: #fff;
+  font-size: 14px;
+  text-shadow: 0 1px 4px rgba(0,0,0,0.6);
+  background: rgba(0,0,0,0.18);
+  opacity: 0;
+  transition: opacity .12s ease-out;
+}
+.chat-head .ch-thumb.yt:hover .ch-play,
+.chat-head .ch-thumb.yt:focus-visible .ch-play { opacity: 1; }
+.chat-head .ch-watch-link {
+  background: none; border: 0; padding: 0;
+  font: inherit; color: var(--accent);
+  cursor: pointer;
+}
+.chat-head .ch-watch-link:hover { text-decoration: underline; }
+.popover.yt-modal { max-width: 880px; }
+.yt-modal-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #000;
+}
+.yt-modal-frame iframe {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  border: 0;
+}
+
 /* Composer */
 .composer-wrap {
   border-top: 1px solid var(--line);

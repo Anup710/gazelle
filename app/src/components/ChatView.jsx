@@ -3,8 +3,10 @@ import { transcribeVoice } from "../api/stt.js";
 import { humanizeError } from "../lib/humanizeError.js";
 import { filenameForMime, startRecording } from "../lib/recorder.js";
 import { capitalize, formatSeconds } from "../lib/format.js";
+import { extractVideoId, thumbnailUrl } from "../lib/youtube.js";
 import { Icon } from "./Icon.jsx";
 import { Message } from "./Message.jsx";
+import { YouTubeModal } from "./YouTubeModal.jsx";
 
 const SUGGESTIONS = [
   "Give me a one-paragraph summary",
@@ -19,6 +21,7 @@ export function ChatView({ session, messages, onSend, isThinking, onPickCitation
   const [draft, setDraft] = useState("");
   const [recording, setRecording] = useState(false);
   const [ttsState, setTtsState] = useState({});
+  const [videoOpen, setVideoOpen] = useState(false);
   const taRef = useRef(null);
   const threadRef = useRef(null);
   const recRef = useRef(null);
@@ -41,6 +44,7 @@ export function ChatView({ session, messages, onSend, isThinking, onPickCitation
   useEffect(() => {
     setDraft("");
     setTtsState({});
+    setVideoOpen(false);
   }, [session.job_id]);
 
   const send = () => {
@@ -112,15 +116,39 @@ export function ChatView({ session, messages, onSend, isThinking, onPickCitation
   const sourceLabel = SOURCE_LABEL[session.source_type] || "Source";
   const durationStr = session.duration_seconds ? formatSeconds(session.duration_seconds) : null;
   const langLabel = session.detected_language ? capitalize(session.detected_language) : null;
+  const videoId =
+    session.source_type === "youtube" ? extractVideoId(session.source) : null;
+  const openVideo = () => setVideoOpen(true);
 
   return (
     <div className="chat">
       <div className="chat-head">
-        <div className="ch-thumb" />
+        {videoId ? (
+          <button
+            type="button"
+            className="ch-thumb yt"
+            onClick={openVideo}
+            title="Watch video"
+            aria-label="Watch video"
+          >
+            <img src={thumbnailUrl(videoId)} alt="" />
+            <span className="ch-play" aria-hidden="true">▶</span>
+          </button>
+        ) : (
+          <div className="ch-thumb" />
+        )}
         <div style={{ minWidth: 0 }}>
           <div className="ch-title">{session.title}</div>
           <div className="ch-meta">
             <span>{sourceLabel}</span>
+            {videoId && (
+              <span style={{ display: "contents" }}>
+                <span className="dot" />
+                <button type="button" className="ch-watch-link" onClick={openVideo}>
+                  Watch video
+                </button>
+              </span>
+            )}
             {durationStr && (
               <span style={{ display: "contents" }}>
                 <span className="dot" />
@@ -236,6 +264,10 @@ export function ChatView({ session, messages, onSend, isThinking, onPickCitation
           </div>
         </div>
       </div>
+
+      {videoOpen && videoId && (
+        <YouTubeModal videoId={videoId} onClose={() => setVideoOpen(false)} />
+      )}
     </div>
   );
 }

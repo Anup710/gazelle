@@ -37,6 +37,7 @@ class SessionRow(BaseModel):
     job_id: str
     title: Optional[str]
     source_type: SourceType
+    source: Optional[str] = None
     status: JobStatus
     archived: bool = False
     created_at: str
