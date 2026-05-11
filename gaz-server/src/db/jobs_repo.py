@@ -43,7 +43,7 @@ def list_sessions() -> list[dict]:
         supabase_client.get()
         .table(TABLE)
         .select(
-            "id,title,source_type,status,archived,created_at,"
+            "id,title,source_type,source,status,archived,created_at,"
             "duration_seconds,detected_language"
         )
         .order("created_at", desc=True)

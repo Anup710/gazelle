@@ -15,6 +15,7 @@ async def list_sessions() -> SessionsResponse:
                 job_id=r["id"],
                 title=r.get("title"),
                 source_type=r["source_type"],
+                source=r.get("source"),
                 status=r["status"],
                 archived=bool(r.get("archived", False)),
                 created_at=str(r["created_at"]),
