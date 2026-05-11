@@ -3,7 +3,9 @@
 import asyncio
 import logging
 import os
+import shutil
 import tempfile
+from functools import lru_cache
 
 import yt_dlp
 
@@ -22,6 +24,31 @@ log = logging.getLogger(__name__)
 _YT_EXTRACTOR_ARGS = {"youtube": {"player_client": ["tv_embedded", "web_safari", "mweb"]}}
 
 
+@lru_cache(maxsize=1)
+def _writable_cookies_path() -> str | None:
+    """Copy the cookies secret to a writable temp path so yt-dlp can save back to it.
+
+    yt-dlp's `cookiefile` is read+write; on Render's read-only /etc/secrets mount,
+    cookie write-back on close raises OSError. We copy once on first use.
+    """
+    src = settings().YOUTUBE_COOKIES_FILE
+    if not src:
+        return None
+    if not os.path.exists(src):
+        log.warning("youtube.cookies_file_missing", extra={"path": src})
+        return None
+    dst = os.path.join(tempfile.gettempdir(), "gazelle_yt_cookies.txt")
+    tmp = dst + ".tmp"
+    try:
+        # copyfile (not copy2): don't preserve the readonly mode bits of the secret mount.
+        shutil.copyfile(src, tmp)
+        os.replace(tmp, dst)
+    except OSError as e:
+        log.warning("youtube.cookies_copy_failed", extra={"src": src, "err": str(e)})
+        return None
+    return dst
+
+
 def _common_yt_opts() -> dict:
     """Shared yt-dlp opts: player-client fallbacks + cookies file when configured."""
     opts: dict = {
@@ -29,12 +56,9 @@ def _common_yt_opts() -> dict:
         "no_warnings": True,
         "extractor_args": _YT_EXTRACTOR_ARGS,
     }
-    cookies_path = settings().YOUTUBE_COOKIES_FILE
+    cookies_path = _writable_cookies_path()
     if cookies_path:
-        if os.path.exists(cookies_path):
-            opts["cookiefile"] = cookies_path
-        else:
-            log.warning("youtube.cookies_file_missing", extra={"path": cookies_path})
+        opts["cookiefile"] = cookies_path
     return opts
 
 
