@@ -329,10 +329,13 @@ Open http://localhost:8000/docs — FastAPI's auto-generated Swagger UI. If you 
 Try the simplest endpoint:
 ```bash
 curl http://localhost:8000/sessions
-# Expect: {"sessions": []}
 ```
 
-If this works, your backend is correctly talking to Supabase. ✅
+**What to expect:**
+- If Supabase is brand-new: `{"sessions": []}`
+- If you've already created sessions during local development: a list of those existing rows.
+
+Either response means the backend is correctly talking to Supabase. ✅ A 500 or a connection error means env vars are wrong — check `SUPABASE_URL` and `SUPABASE_KEY` in `gaz-server/.env`.
 
 ---
 
@@ -440,8 +443,13 @@ Render gives you a URL like `https://gazelle-backend.onrender.com`. **Save this*
 Test it from your laptop:
 ```bash
 curl https://gazelle-backend.onrender.com/sessions
-# Expect: {"sessions": []}
 ```
+
+**What to expect:** the response should be a JSON object with a `sessions` array. Two valid outcomes:
+- `{"sessions": []}` if your Supabase `jobs` table is empty.
+- A populated list of jobs if you've already created sessions locally against the same Supabase project (Render is just a new compute environment pointing at your existing DB — the rows you see locally will show up here too). This is the expected case if you've been testing locally for a while.
+
+Either outcome confirms Render is talking to Supabase correctly. A 500, timeout, or HTML error page means an env var is wrong or the service is still booting — check Render → Logs.
 
 > 📚 Docs: https://render.com/docs/deploy-fastapi
 
