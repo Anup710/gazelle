@@ -180,3 +180,38 @@ If any of these fail, check Render Logs first. 90% of demo-day failures are: (a)
 90% of bugs are env-var mismatches (this file's whole reason to exist).
 9% are CORS.
 1% are real code bugs.
+
+---
+
+## 10. The YouTube bot-wall incident (2026-05-11) — what to remember
+
+**Symptom:** YouTube ingest jobs fail on Render (works fine locally). Render logs show:
+
+```
+ERROR: [youtube] <video_id>: Sign in to confirm you're not a bot.
+Use --cookies-from-browser or --cookies for the authentication.
+```
+
+…and the orchestrator logs `ingest.unknown_failure` for the job. Appeared after a cold start, but the cold start is incidental — the real trigger is YouTube's bot detection flagging Render's datacenter IP.
+
+**Cause:** YouTube aggressively bot-walls requests from cloud provider IP ranges (Render, AWS, GCP, Fly, etc.). The default yt-dlp `web` player client is the most heavily scrutinized — it's the one a real browser would use, so YouTube applies the strictest checks to it. Residential IPs (your laptop) are not on the watchlist, which is why local dev works.
+
+**Fix:** Tell yt-dlp to impersonate alternative YouTube clients that are less heavily inspected. In `gaz-server/src/pipeline/transcription/youtube.py`:
+
+```python
+_YT_EXTRACTOR_ARGS = {"youtube": {"player_client": ["tv_embedded", "web_safari", "mweb"]}}
+```
+
+Wire it into **both** `_get_metadata` and `_download_audio` opts (`extractor_args=_YT_EXTRACTOR_ARGS`) — otherwise the bot wall just moves from step 1 to step 2. Also bump the `yt-dlp` floor in `requirements.txt` (e.g. `>=2025.1.15`) so pip resolves a newer build with fresher bypasses. Deploy with Render → **Manual Deploy → Clear build cache & deploy** so Docker doesn't reuse the cached pip layer.
+
+`captions.py` uses `youtube-transcript-api`, a separate code path that doesn't hit the same wall — leave it alone.
+
+**Lesson — this fix is temporary by design.** YouTube and yt-dlp are in a constant cat-and-mouse loop; the player-client trick can break again in weeks or months. The durable workaround is cookies:
+
+1. Install a "Get cookies.txt" extension in your browser, log into YouTube, export `youtube.com` cookies.
+2. Upload as a Render Secret File at `/etc/secrets/youtube_cookies.txt`.
+3. Add `"cookiefile": "/etc/secrets/youtube_cookies.txt"` to the yt-dlp `opts` dict.
+
+Cookies expire (weeks to months), so they need periodic refresh — but a refresh is much cheaper than a code change that may not work. Treat the player-client trick as the "happy path" and cookies as the fallback.
+
+**Diagnostic shortcut.** If a future YouTube-related failure surfaces as `ingest.unknown_failure` with no obvious cause, grep the Render log for `Sign in to confirm` — if present, the bot wall is back and the cookie fallback is the next step.

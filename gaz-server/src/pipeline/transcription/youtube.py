@@ -16,9 +16,18 @@ from .captions import fetch_captions
 
 log = logging.getLogger(__name__)
 
+# YouTube's bot detection aggressively flags datacenter IPs on the default `web` client.
+# Falling back through TV-embedded → Safari → mobile web tends to slip past it.
+_YT_EXTRACTOR_ARGS = {"youtube": {"player_client": ["tv_embedded", "web_safari", "mweb"]}}
+
 
 def _get_metadata(url: str) -> dict:
-    opts = {"skip_download": True, "quiet": True, "no_warnings": True}
+    opts = {
+        "skip_download": True,
+        "quiet": True,
+        "no_warnings": True,
+        "extractor_args": _YT_EXTRACTOR_ARGS,
+    }
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
     return info or {}
@@ -31,6 +40,7 @@ def _download_audio(url: str, video_id: str) -> str:
         "outtmpl": out_template,
         "quiet": True,
         "no_warnings": True,
+        "extractor_args": _YT_EXTRACTOR_ARGS,
         "postprocessors": [
             {
                 "key": "FFmpegExtractAudio",
