@@ -41,7 +41,8 @@ def _common_yt_opts() -> dict:
 def _get_metadata(url: str) -> dict:
     opts = {**_common_yt_opts(), "skip_download": True}
     with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+        # process=False skips format selection — we only need title/duration here.
+        info = ydl.extract_info(url, download=False, process=False)
     return info or {}
 
 
