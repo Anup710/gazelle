@@ -38,6 +38,10 @@ export function TTSButton({ messageId, text, language, ttsState, setTtsState, no
     const audio = new Audio(url);
     audioRef.current = audio;
     audio.ontimeupdate = () => {
+      // Browsers can deliver one late timeupdate after audio.pause(); without
+      // this guard it overwrites our paused state back to playing, forcing a
+      // second click on the pause button.
+      if (audio.paused) return;
       const dur = audio.duration || 0;
       const pct = dur ? audio.currentTime / dur : 0;
       setTtsState((s) => ({ ...s, [messageId]: { status: "playing", pct, dur } }));
