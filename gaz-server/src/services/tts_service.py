@@ -1,8 +1,11 @@
-"""POST /tts — stream mp3 audio from OpenAI gpt-4o-mini-tts.
+"""POST /tts — stream mp3 audio from OpenAI TTS.
 
-Per-language `instructions` steer accent, pace, and code-switching. The
+Per-language model routing: English uses the lightweight tts-1 voice (fast,
+cheap, native English prosody). Hindi and Hinglish use gpt-4o-mini-tts with
+per-language `instructions` to steer accent and code-switching. The
 `instructions` field is honored only by gpt-4o-mini-tts; the OpenAI SDK
-silently drops it on tts-1 / tts-1-hd.
+silently drops it on tts-1 / tts-1-hd, so we only pass it on the expensive
+path.
 
 Truncates input to the last complete paragraph within the 3,500-character cap
 (silent — FE infers from input length per FE plan §8 Seam 6).
@@ -11,22 +14,23 @@ Truncates input to the last complete paragraph within the 3,500-character cap
 from typing import AsyncIterator
 
 from ..clients import openai_client
-from ..core.config import settings
 from ..core.constants import TTS_CHAR_LIMIT
 from ..core.errors import AppError
 from ..schemas.rag import Language
 
-# Tuned for voice="sage". If the voice is swapped via env, retune wording.
+# Per-language routing. English stays on tts-1 — there's no accent problem to
+# solve and the multilingual model is wasted spend + latency. Hindi/Hinglish
+# need gpt-4o-mini-tts because the instructions are doing real work there.
+_TTS_CONFIG: dict[Language, dict] = {
+    "english":  {"model": "tts-1",           "voice": "nova"},
+    "hindi":    {"model": "gpt-4o-mini-tts", "voice": "sage"},
+    "hinglish": {"model": "gpt-4o-mini-tts", "voice": "sage"},
+}
+
+# Instructions are tuned for voice="sage" on gpt-4o-mini-tts. Only the Hindi
+# and Hinglish entries are actually sent — English routes to tts-1 which
+# silently drops the kwarg, so we skip it for clarity.
 _TTS_INSTRUCTIONS: dict[Language, str] = {
-    "english": (
-        "Voice: a warm, patient educational tutor. Pace: unhurried, "
-        "around 165 words per minute. Tone: friendly, curious, lightly "
-        "encouraging — like a one-on-one teacher who genuinely wants "
-        "the student to understand. Diction: clean neutral English, no "
-        "regional exaggeration. Pause briefly at sentence ends and "
-        "after commas. Emphasize key technical terms slightly so they "
-        "land. Never sound rushed, sales-y, or robotic."
-    ),
     "hindi": (
         "Voice: a warm, patient Indian tutor speaking natural Hindi. "
         "Accent: authentic North-Indian Hindi — not anglicized, not "
@@ -71,19 +75,18 @@ def truncate_to_paragraph(text: str, limit: int = TTS_CHAR_LIMIT) -> str:
 
 
 async def stream_speech(text: str, language: Language) -> AsyncIterator[bytes]:
-    """Yields mp3 chunks. Per-language `instructions` steer accent and
-    code-switching on gpt-4o-mini-tts."""
-    s = settings()
-    payload = truncate_to_paragraph(text)
-    instructions = _TTS_INSTRUCTIONS.get(language, _TTS_INSTRUCTIONS["english"])
+    """Yields mp3 chunks. Per-language model + voice routing."""
+    cfg = _TTS_CONFIG.get(language, _TTS_CONFIG["english"])
+    kwargs: dict = {
+        "model": cfg["model"],
+        "voice": cfg["voice"],
+        "input": truncate_to_paragraph(text),
+        "response_format": "mp3",
+    }
+    if cfg["model"].startswith("gpt-4o"):
+        kwargs["instructions"] = _TTS_INSTRUCTIONS.get(language, _TTS_INSTRUCTIONS["hindi"])
     try:
-        async with openai_client.get().audio.speech.with_streaming_response.create(
-            model=s.TTS_MODEL,
-            voice=s.TTS_VOICE,
-            input=payload,
-            instructions=instructions,
-            response_format="mp3",
-        ) as rsp:
+        async with openai_client.get().audio.speech.with_streaming_response.create(**kwargs) as rsp:
             async for chunk in rsp.iter_bytes(chunk_size=8192):
                 yield chunk
     except AppError:
