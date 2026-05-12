@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ingestText, ingestUpload, ingestYoutube } from "./api/ingest.js";
 import { archiveJob, deleteJob } from "./api/job.js";
+import { listMessages } from "./api/messages.js";
 import { ragQuery } from "./api/rag.js";
 import { listSessions } from "./api/sessions.js";
 import { ChatView } from "./components/ChatView.jsx";
@@ -12,7 +13,7 @@ import { Sidebar } from "./components/Sidebar.jsx";
 import { useJobPolling } from "./hooks/useJobPolling.js";
 import { useTweaks } from "./hooks/useTweaks.js";
 import { adaptCitation, tokenizeWithCitations } from "./lib/citations.js";
-import { updateHistory } from "./lib/conversation.js";
+import { deriveRecentTurns, updateHistory } from "./lib/conversation.js";
 import { capitalize } from "./lib/format.js";
 import { humanizeError } from "./lib/humanizeError.js";
 
@@ -33,6 +34,9 @@ export default function App() {
   const [thinkingFor, setThinkingFor] = useState(null);
   const [openCitation, setOpenCitation] = useState(null);
   const [toast, setToast] = useState(null);
+  // Track sessions whose chat history we've already pulled this page-load so
+  // session-switching doesn't refetch on every click. Cleared by a hard refresh.
+  const hydratedSessions = useRef(new Set());
 
   const activeSession = sessions.find((s) => s.job_id === activeId) || null;
   const messages = messagesBySession[activeId] || [];
@@ -106,6 +110,45 @@ export default function App() {
     handleSubmitInput({ source: "youtube", payload: { url }, title });
   };
 
+  // Adapt a persisted-message row from the server into the in-memory shape
+  // App.jsx + ChatView.jsx use. Users keep `text`; assistants get
+  // `responseText` + re-tokenized `parts` + adapted `citations` + lang badge.
+  // Re-tokenizing on hydrate (rather than persisting `parts`) keeps the
+  // tokenizer the single source of truth.
+  const toFrontendMessage = (m) => {
+    if (m.role === "user") {
+      return { id: `pu_${m.id}`, role: "user", text: m.content };
+    }
+    return {
+      id: `pa_${m.id}`,
+      role: "assistant",
+      responseText: m.content,
+      parts: tokenizeWithCitations(m.content),
+      citations: (m.citations || []).map(adaptCitation),
+      lang: m.language ? capitalize(m.language) : undefined,
+    };
+  };
+
+  const hydrateSessionMessages = async (sid) => {
+    let res;
+    try {
+      res = await listMessages(sid);
+    } catch {
+      notify("error", "Couldn't load this conversation.");
+      return;
+    }
+    const adapted = (res.messages || []).map(toFrontendMessage);
+    setMessagesBySession((m) => ({ ...m, [sid]: adapted }));
+    setHistoryBySession((h) => ({
+      ...h,
+      [sid]: {
+        conversation_summary: res.conversation_summary ?? null,
+        recent_turns: deriveRecentTurns(adapted),
+      },
+    }));
+    hydratedSessions.current.add(sid);
+  };
+
   const handleSelect = (id) => {
     const s = sessions.find((x) => x.job_id === id);
     if (!s) return;
@@ -113,6 +156,10 @@ export default function App() {
     if (s.status === "ready") {
       setPendingJob(null);
       setView("chat");
+      // Pull persisted history on the first switch to a ready session this
+      // page-load. Errors leave state empty and are non-fatal — the next
+      // /rag/query still works; subsequent switches retry the fetch.
+      if (!hydratedSessions.current.has(id)) hydrateSessionMessages(id);
     } else {
       setPendingJob(s);
       setView("processing");
