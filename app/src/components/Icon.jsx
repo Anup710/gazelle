@@ -54,6 +54,11 @@ export const Icon = {
       <rect x="14" y="5" width="4" height="14" rx="1" />
     </svg>
   ),
+  Play: (p) => (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" {...p}>
+      <path d="M7 4.5v15a1 1 0 0 0 1.55.83l12-7.5a1 1 0 0 0 0-1.66l-12-7.5A1 1 0 0 0 7 4.5z" />
+    </svg>
+  ),
   Search: (p) => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...p}>
       <circle cx="11" cy="11" r="7" />
