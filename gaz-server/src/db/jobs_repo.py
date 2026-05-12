@@ -100,6 +100,10 @@ def save_validation(job_id: str, result: dict) -> None:
     supabase_client.get().table(TABLE).update({"validation_result": result}).eq("id", job_id).execute()
 
 
+def save_summary(job_id: str, summary: dict) -> None:
+    supabase_client.get().table(TABLE).update({"summary_json": summary}).eq("id", job_id).execute()
+
+
 def mark_failed(job_id: str, failure_reason: str, error_message: str) -> None:
     supabase_client.get().table(TABLE).update(
         {
