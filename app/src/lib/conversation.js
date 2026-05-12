@@ -25,3 +25,15 @@ export function updateHistory(historyBySession, sid, userText, assistantText, ne
 
   return { ...historyBySession, [sid]: { conversation_summary, recent_turns: nextTurns } };
 }
+
+// Build the `recent_turns` array the server expects from a hydrated message
+// list. Mirrors the truncation rule applied by `updateHistory` after every
+// turn, so a refresh-and-send produces the same payload as a fresh send
+// would have. `messages` items use the frontend shape ({ role, text } for
+// users, { role, responseText } for assistants — see App.jsx).
+export function deriveRecentTurns(messages) {
+  return messages.slice(-MAX_RECENT_MESSAGES).map((m) => ({
+    role: m.role,
+    content: m.role === "user" ? m.text : m.responseText,
+  }));
+}

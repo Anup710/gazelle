@@ -43,7 +43,7 @@ def list_sessions() -> list[dict]:
         supabase_client.get()
         .table(TABLE)
         .select(
-            "id,title,source_type,source,status,archived,created_at,"
+            "id,title,source_type,source,status,archived,created_at,updated_at,"
             "duration_seconds,detected_language"
         )
         .order("created_at", desc=True)
@@ -102,6 +102,28 @@ def save_validation(job_id: str, result: dict) -> None:
 
 def save_summary(job_id: str, summary: dict) -> None:
     supabase_client.get().table(TABLE).update({"summary_json": summary}).eq("id", job_id).execute()
+
+
+def update_session_state(
+    job_id: str,
+    *,
+    conversation_summary: Optional[str] = None,
+    turn_count: Optional[int] = None,
+) -> None:
+    """Mirror the client's compaction state onto `jobs`.
+
+    Only writes keys explicitly passed — so a call that bumps `turn_count` on
+    a non-compaction turn cannot accidentally null out an existing
+    `conversation_summary`. Same shape as `save_*` helpers above: no return.
+    """
+    update: dict = {}
+    if conversation_summary is not None:
+        update["conversation_summary"] = conversation_summary
+    if turn_count is not None:
+        update["turn_count"] = turn_count
+    if not update:
+        return
+    supabase_client.get().table(TABLE).update(update).eq("id", job_id).execute()
 
 
 def mark_failed(job_id: str, failure_reason: str, error_message: str) -> None:
