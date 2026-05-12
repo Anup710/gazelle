@@ -19,6 +19,7 @@ async def list_sessions() -> SessionsResponse:
                 status=r["status"],
                 archived=bool(r.get("archived", False)),
                 created_at=str(r["created_at"]),
+                last_activity_at=str(r["updated_at"]) if r.get("updated_at") else None,
                 duration_seconds=r.get("duration_seconds"),
                 detected_language=r.get("detected_language"),
             )

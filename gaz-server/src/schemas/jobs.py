@@ -41,6 +41,10 @@ class SessionRow(BaseModel):
     status: JobStatus
     archived: bool = False
     created_at: str
+    # Wall-clock of the last server-side write — reflects chat activity once
+    # /rag/query starts mirroring turns into Supabase. Falls back to
+    # `created_at` on the FE for sessions that haven't been chatted with yet.
+    last_activity_at: Optional[str] = None
     duration_seconds: Optional[int] = None
     detected_language: Optional[str] = None
 
