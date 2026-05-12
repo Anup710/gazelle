@@ -157,9 +157,14 @@ Supabase = managed Postgres + a nice web dashboard. We use it only for the `jobs
    - **Pricing plan:** Free.
 3. Click **Create**. Wait ~2 minutes for provisioning.
 
-### 6.2 Create the `jobs` table
+### 6.2 Create the `jobs` and `messages` tables
 
-This is the only table V1 needs. Schema defined in `plan/01-transcription/TRD_AI_Tutor_Transcript_Service.md` §10.
+V1 needs two tables: `jobs` (one row per session/ingest) and `messages` (chat
+history for each session). The base `jobs` schema is defined in
+`plan/01-transcription/TRD_AI_Tutor_Transcript_Service.md` §10; later
+features extended it with `summary_json` (migration 001), and
+`conversation_summary` + `turn_count` (migration 002, alongside the new
+`messages` table).
 
 1. In the project dashboard, left sidebar → **SQL Editor** → **"New query"**.
 2. Paste and run:
@@ -192,6 +197,11 @@ create table jobs (
       'unknown'
     )),
   archived boolean not null default false,
+  -- Cached structured summary for the summary-intent path (migration 001).
+  summary_json jsonb,
+  -- Server-side mirror of the chat-history compaction state (migration 002).
+  conversation_summary text,
+  turn_count int not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -207,10 +217,26 @@ create trigger jobs_set_updated_at
 
 -- Index for sidebar query (GET /sessions sorts by created_at desc)
 create index jobs_created_at_idx on jobs (created_at desc);
+
+-- Persisted chat history (migration 002). Each /rag/query mirrors the user
+-- and assistant turns into this table; GET /sessions/:id/messages reads them
+-- back on FE refresh / session-switch.
+create table messages (
+  id          uuid primary key default gen_random_uuid(),
+  session_id  uuid not null references jobs(id) on delete cascade,
+  role        text not null check (role in ('user', 'assistant')),
+  content     text not null,
+  citations   jsonb not null default '[]'::jsonb,
+  language    text,
+  created_at  timestamptz not null default now()
+);
+
+create index messages_session_idx on messages (session_id, created_at);
 ```
 
 3. Click **Run**. You should see "Success. No rows returned."
-4. Verify: left sidebar → **Table Editor** → you should see `jobs` listed.
+4. Verify: left sidebar → **Table Editor** → you should see both `jobs` and
+   `messages` listed.
 
 > 📚 Docs: https://supabase.com/docs/guides/database/tables
 
