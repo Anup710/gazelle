@@ -22,8 +22,10 @@ class Settings(BaseSettings):
     EMBED_MODEL: str = "text-embedding-3-small"
     GEN_MODEL: str = "gpt-4o-mini"
     GROQ_WHISPER_MODEL: str = "whisper-large-v3-turbo"
-    TTS_MODEL: str = "tts-1"
-    TTS_VOICE: str = "alloy"
+    # `instructions` (set in tts_service) is honored only by gpt-4o-mini-tts*;
+    # the OpenAI SDK silently drops it on tts-1 / tts-1-hd.
+    TTS_MODEL: str = "gpt-4o-mini-tts"
+    TTS_VOICE: str = "sage"
 
     # Retrieval tuning
     MIN_SIMILARITY_SCORE: float = 0.72
