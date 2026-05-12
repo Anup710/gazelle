@@ -16,7 +16,7 @@ from .clients import qdrant_client
 from .core.config import settings
 from .core.errors import AppError
 from .core.logging import setup_logging
-from .routes import health, ingest, jobs, rag, sessions, stt, tts
+from .routes import health, ingest, jobs, messages, rag, sessions, stt, tts
 
 setup_logging(settings().LOG_LEVEL)
 log = logging.getLogger(__name__)
@@ -77,6 +77,7 @@ app.include_router(health.router)
 app.include_router(ingest.router)
 app.include_router(jobs.router)
 app.include_router(sessions.router)
+app.include_router(messages.router)
 app.include_router(stt.router)
 app.include_router(rag.router)
 app.include_router(tts.router)

@@ -14,7 +14,7 @@ from typing import Optional
 from fastapi import APIRouter
 
 from ..core.errors import AppError
-from ..db import jobs_repo
+from ..db import jobs_repo, messages_repo
 from ..rag.augment import augment_query
 from ..rag.compact import compact_history, should_compact
 from ..rag.generate import generate_answer
@@ -34,6 +34,41 @@ _ISO_TO_PROMPT_LANG = {"en": "english", "hi": "hindi"}
 def _video_prompt_language(job: dict) -> str:
     iso = (job.get("detected_language") or "").lower()
     return _ISO_TO_PROMPT_LANG.get(iso, "english")
+
+
+def _persist_turn(
+    session_id: str,
+    *,
+    user_text: str,
+    assistant_text: str,
+    assistant_citations: list[dict],
+    language: str,
+    new_turn_count: int,
+    new_conversation_summary: Optional[str],
+) -> None:
+    """Best-effort mirror of one /rag/query turn into Supabase.
+
+    Persistence is a non-critical side-effect: the live client already holds
+    the rendered turn in memory, so a transient Supabase blip should degrade
+    hydrate-after-refresh rather than break the in-progress chat. Any
+    exception here is logged and swallowed.
+    """
+    try:
+        messages_repo.insert_message(session_id, "user", user_text)
+        messages_repo.insert_message(
+            session_id,
+            "assistant",
+            assistant_text,
+            citations=assistant_citations,
+            language=language,
+        )
+        jobs_repo.update_session_state(
+            session_id,
+            conversation_summary=new_conversation_summary,
+            turn_count=new_turn_count,
+        )
+    except Exception:
+        log.exception("persistence.write_failed", extra={"session_id": session_id})
 
 
 async def _load_or_generate_summary(job: dict) -> Optional[dict]:
@@ -121,13 +156,20 @@ async def rag_query(req: RagRequest) -> RagResponse:
                 "query_type": query_type,
             },
         )
+        refusal_text = INSUFFICIENT_CONTEXT_REFUSAL.get(
+            aug["query_language"], INSUFFICIENT_CONTEXT_REFUSAL["english"]
+        )
+        _persist_turn(
+            req.session_id,
+            user_text=req.query_text,
+            assistant_text=refusal_text,
+            assistant_citations=[],
+            language=aug["query_language"],
+            new_turn_count=req.turn_count + 1,
+            new_conversation_summary=None,
+        )
         return RagResponse(
-            response=ResponseBody(
-                text=INSUFFICIENT_CONTEXT_REFUSAL.get(
-                    aug["query_language"], INSUFFICIENT_CONTEXT_REFUSAL["english"]
-                ),
-                language=aug["query_language"],
-            ),
+            response=ResponseBody(text=refusal_text, language=aug["query_language"]),
             conversation_summary=None,
             citations=[],
         )
@@ -152,6 +194,17 @@ async def rag_query(req: RagRequest) -> RagResponse:
             current_assistant=answer,
         )
         log.info("compaction.fired", extra={"turn_count": req.turn_count + 1})
+
+    # 7. Mirror this turn to Supabase so the FE can hydrate on refresh.
+    _persist_turn(
+        req.session_id,
+        user_text=req.query_text,
+        assistant_text=answer,
+        assistant_citations=[c.model_dump() for c in citations],
+        language=aug["query_language"],
+        new_turn_count=req.turn_count + 1,
+        new_conversation_summary=new_summary,
+    )
 
     return RagResponse(
         response=ResponseBody(text=answer, language=aug["query_language"]),
