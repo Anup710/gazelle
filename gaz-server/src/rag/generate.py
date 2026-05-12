@@ -15,6 +15,29 @@ log = logging.getLogger(__name__)
 
 _LANG_NAME = {"english": "English", "hindi": "Hindi", "hinglish": "Hinglish"}
 
+# Appended to the user message right before generation so the script rule is
+# the LAST thing the model reads. The system-prompt rule alone gets diluted by
+# English-heavy retrieved chunks and prior turns; recency-on-user-message wins.
+# The Hindi anchor explicitly closes the "aasan bhasha" loophole where the model
+# treats a request for simpler language as license to romanize.
+_SCRIPT_ANCHOR = {
+    "english": (
+        "[Reply entirely in English using the Latin alphabet.]"
+    ),
+    "hindi": (
+        "[Reply entirely in Hindi using the Devanagari script. Do NOT "
+        "romanize Hindi words even if the user asks for simpler, easier, "
+        "or 'aasan' language — 'simpler' means simpler vocabulary in the "
+        "same Devanagari script, NOT a script switch. English technical "
+        "terms may stay in Latin script.]"
+    ),
+    "hinglish": (
+        "[Reply entirely in Hinglish using the Latin alphabet only. Write "
+        "Hindi words in Latin (e.g. matlab, samjho, kyunki) mixed with "
+        "English. Do NOT use Devanagari anywhere in the reply.]"
+    ),
+}
+
 
 def _render_chunks(citations: list[Citation]) -> str:
     if not citations:
@@ -97,7 +120,8 @@ async def generate_answer(
     messages: list[dict] = [{"role": "system", "content": full_system}]
     for t in recent_turns:
         messages.append({"role": t.role, "content": t.content})
-    messages.append({"role": "user", "content": query_text})
+    anchor = _SCRIPT_ANCHOR.get(query_language, _SCRIPT_ANCHOR["english"])
+    messages.append({"role": "user", "content": f"{query_text}\n\n{anchor}"})
 
     try:
         rsp = await openai_client.get().chat.completions.create(
