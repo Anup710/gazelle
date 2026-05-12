@@ -38,6 +38,10 @@ export function TTSButton({ messageId, text, language, ttsState, setTtsState, no
     const audio = new Audio(url);
     audioRef.current = audio;
     audio.ontimeupdate = () => {
+      // Browsers can deliver one late timeupdate after audio.pause(); without
+      // this guard it overwrites our paused state back to playing, forcing a
+      // second click on the pause button.
+      if (audio.paused) return;
       const dur = audio.duration || 0;
       const pct = dur ? audio.currentTime / dur : 0;
       setTtsState((s) => ({ ...s, [messageId]: { status: "playing", pct, dur } }));
@@ -63,16 +67,25 @@ export function TTSButton({ messageId, text, language, ttsState, setTtsState, no
     }
   };
 
-  const stop = () => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
-    }
-    if (urlRef.current) {
-      URL.revokeObjectURL(urlRef.current);
-      urlRef.current = null;
-    }
-    setTtsState((s) => ({ ...s, [messageId]: { status: "idle", pct: 0 } }));
+  const pause = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.pause();
+    const dur = audio.duration || state.dur || 0;
+    const pct = dur ? audio.currentTime / dur : state.pct || 0;
+    setTtsState((s) => ({ ...s, [messageId]: { status: "paused", pct, dur } }));
+  };
+
+  const resume = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.play().catch(() => {
+      setTtsState((s) => ({ ...s, [messageId]: { status: "error", pct: 0 } }));
+      notify?.("error", "Unable to play audio. Please try again.");
+    });
+    const dur = audio.duration || state.dur || 0;
+    const pct = dur ? audio.currentTime / dur : state.pct || 0;
+    setTtsState((s) => ({ ...s, [messageId]: { status: "playing", pct, dur } }));
   };
 
   if (state.status === "loading") {
@@ -97,8 +110,21 @@ export function TTSButton({ messageId, text, language, ttsState, setTtsState, no
     const dur = state.dur || 0;
     const cur = dur * (state.pct || 0);
     return (
-      <button className="tts-btn playing" onClick={stop} aria-label="Pause audio">
+      <button className="tts-btn playing" onClick={pause} aria-label="Pause audio">
         <Icon.Pause />
+        <span className="tts-progress" style={{ "--p": `${(state.pct || 0) * 100}%` }} />
+        <span className="tts-time">
+          {formatSeconds(cur)} / {formatSeconds(dur)}
+        </span>
+      </button>
+    );
+  }
+  if (state.status === "paused") {
+    const dur = state.dur || 0;
+    const cur = dur * (state.pct || 0);
+    return (
+      <button className="tts-btn playing" onClick={resume} aria-label="Resume audio">
+        <Icon.Play />
         <span className="tts-progress" style={{ "--p": `${(state.pct || 0) * 100}%` }} />
         <span className="tts-time">
           {formatSeconds(cur)} / {formatSeconds(dur)}

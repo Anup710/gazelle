@@ -22,8 +22,8 @@ class Settings(BaseSettings):
     EMBED_MODEL: str = "text-embedding-3-small"
     GEN_MODEL: str = "gpt-4o-mini"
     GROQ_WHISPER_MODEL: str = "whisper-large-v3-turbo"
-    TTS_MODEL: str = "tts-1"
-    TTS_VOICE: str = "alloy"
+    # TTS model + voice are not env-configurable: tts_service routes per
+    # language (English→tts-1/nova, Hindi/Hinglish→gpt-4o-mini-tts/sage).
 
     # Retrieval tuning
     MIN_SIMILARITY_SCORE: float = 0.72

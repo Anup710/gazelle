@@ -1,12 +1,10 @@
 import { request } from "./client.js";
 
-// Server expects "en" or "hi" — map from rag/query language values.
+const VALID = new Set(["english", "hindi", "hinglish"]);
+
 function ttsLangParam(lang) {
-  if (!lang) return "en";
-  const l = lang.toLowerCase();
-  if (l === "english") return "en";
-  if (l === "hindi" || l === "hinglish") return "hi";
-  return "en";
+  const l = (lang || "").toLowerCase();
+  return VALID.has(l) ? l : "english";
 }
 
 // Returns an object URL the caller must URL.revokeObjectURL when done.
