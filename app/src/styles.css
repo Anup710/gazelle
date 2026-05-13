@@ -1070,6 +1070,8 @@ input, textarea { font-family: inherit; color: inherit; }
 }
 .bubble p { margin: 0 0 10px; }
 .bubble p:last-child { margin-bottom: 0; }
+.bubble .rich-text { margin: 0; }
+.bubble .rich-text .katex-display { margin: 0.6em 0; overflow-x: auto; overflow-y: hidden; }
 .bubble strong { font-weight: 600; }
 .bubble code {
   background: var(--line-soft);
