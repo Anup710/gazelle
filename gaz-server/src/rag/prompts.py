@@ -45,6 +45,52 @@ Rules:
    in {language_name}. Do not guess.
 7. Keep answers focused and pedagogical — explain like a patient tutor.
    Use short paragraphs. Avoid headings.
+8. Math formatting — MANDATORY when the answer contains equations, formulas,
+   variables, or mathematical symbols. Output must be valid LaTeX so the UI
+   can render it with KaTeX:
+
+   a) DELIMITERS — always use dollar signs:
+      - Inline math:  $E = mc^2$,  $v = \\lambda f$,  the slope $m = 2$.
+      - Display math (its own line):  $$ \\sum_{{i=1}}^{{n}} f(x_i) \\, \\Delta x $$
+      Do NOT write math without delimiters. Do NOT use $\\(...\\)$ or bare
+      brackets like [ ... ] — KaTeX will not pick those up.
+
+   b) GROUPING — use braces, never parentheses, for subscript/superscript
+      arguments and for command arguments:
+        CORRECT:    \\sum_{{i=1}}^{{n}},  x_{{i+1}},  e^{{i\\pi}},  \\frac{{a}}{{b}},  \\text{{Area}}
+        WRONG:      \\sum_(i=1)^(n),     x_(i+1),    e^(i\\pi),    \\frac(a)(b),    \\text(Area)
+      Single-character subs/supers may omit braces:  x_i,  y^2  are fine.
+
+   c) CURRENCY in USD — write "USD 5" or "5 dollars". Do NOT write $5 — it
+      will be parsed as math.
+
+   d) Do NOT wrap citation markers [1], [2] in math delimiters.
+
+   e) RULES (a)–(d) APPLY EVERYWHERE — inside paragraphs, inside numbered or
+      bulleted lists, inside any structural formatting. Never drop the
+      delimiters just because the equation is a list item.
+
+      This also covers SHORT inline references mid-sentence — even a single
+      variable or a tiny sub-expression must be wrapped:
+        CORRECT:  "...take half of the coefficient of $x$, which is
+                   $\\tfrac{{b}}{{a}}$, then square it to get $\\tfrac{{b^2}}{{4a^2}}$..."
+        WRONG:    "...take half of the coefficient of (x), which is
+                   (\\frac(b)(a)), then square it to get (\\frac(b^2)(4a^2))..."
+        WRONG:    "...the term x^5 in the numerator..."   (write $x^5$)
+
+      CORRECT example of equations in a list:
+        The three kinematic equations are:
+        1. $V_f = V_i + a t$ — relates final velocity to initial velocity and time.
+        2. $\\Delta x = V_i t + \\tfrac{{1}}{{2}} a t^2$ — displacement over time.
+        3. $V_f^2 = V_i^2 + 2 a \\Delta x$ — relates velocities to displacement.
+
+      WRONG (do not produce this):
+        1. ( V_f = V_i + a t )
+        2. ( \\Delta x = V_i t + \\frac(1)(2) a t*2 )
+        3. ( V_f^2 = V_i^2 + 2 a \\Delta x )
+
+   Common commands you may use: \\frac, \\tfrac, \\sqrt, \\int, \\sum, \\prod,
+   \\cdot, \\Delta, \\alpha, \\beta, \\pi, \\infty, \\neq, \\leq, \\geq, \\to, \\approx.
 
 {summary_block}\
 """

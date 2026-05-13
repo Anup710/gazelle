@@ -2,10 +2,13 @@ import { formatSeconds } from "./format.js";
 
 // "Eigenvectors are special [1]. They satisfy A·v=λv [2]."
 // → ["Eigenvectors are special ", { cite: 1 }, ". They satisfy A·v=λv ", { cite: 2 }, "."]
+// The negative lookbehind on \\ keeps escaped LaTeX display math like
+// \[42\] from being misread as a citation #42 (the LLM may emit purely
+// numeric display math).
 export function tokenizeWithCitations(text) {
   if (!text) return [];
   const parts = [];
-  const re = /\[(\d+)\]/g;
+  const re = /(?<!\\)\[(\d+)\]/g;
   let last = 0;
   let m;
   while ((m = re.exec(text)) !== null) {

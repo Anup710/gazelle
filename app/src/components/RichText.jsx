@@ -1,28 +1,50 @@
 import { Fragment } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+
+// Flatten markdown's default <p> so each segment flows inline with the
+// citation buttons that live between segments.
+const mdComponents = {
+  p: ({ children }) => <>{children}</>,
+};
+
+const remarkPlugins = [remarkMath];
+const rehypePlugins = [rehypeKatex];
+
+function renderMarkdownPart(text, baseKey) {
+  // Preserve the original \n\n → <br/> behavior. react-markdown would
+  // otherwise produce sibling <p> blocks which we've flattened, losing
+  // the visual break entirely.
+  const segments = text.split(/\n\n/);
+  const out = [];
+  segments.forEach((seg, idx) => {
+    out.push(
+      <ReactMarkdown
+        key={`${baseKey}-md-${idx}`}
+        remarkPlugins={remarkPlugins}
+        rehypePlugins={rehypePlugins}
+        components={mdComponents}
+      >
+        {seg}
+      </ReactMarkdown>,
+    );
+    if (idx < segments.length - 1) {
+      out.push(<br key={`${baseKey}-br-${idx}`} />);
+    }
+  });
+  return out;
+}
 
 // Renders an array of strings interleaved with { cite: N } objects.
-// String segments support **bold**, `code`, and \n\n paragraph breaks.
+// String segments support markdown (bold, code, lists) and LaTeX math
+// via \(...\) inline and \[...\] display.
 export function RichText({ parts, onCite }) {
   return (
-    <p>
+    <div className="rich-text">
       {parts.map((p, i) => {
         if (typeof p === "string") {
-          const tokens = [];
-          let s = p;
-          let key = 0;
-          const re = /(\*\*[^*]+\*\*|`[^`]+`|\n\n)/g;
-          let last = 0;
-          let m;
-          while ((m = re.exec(s)) !== null) {
-            if (m.index > last) tokens.push(s.slice(last, m.index));
-            const tok = m[0];
-            if (tok.startsWith("**")) tokens.push(<strong key={`b${i}-${key++}`}>{tok.slice(2, -2)}</strong>);
-            else if (tok.startsWith("`")) tokens.push(<code key={`c${i}-${key++}`}>{tok.slice(1, -1)}</code>);
-            else tokens.push(<br key={`br${i}-${key++}`} />);
-            last = m.index + tok.length;
-          }
-          if (last < s.length) tokens.push(s.slice(last));
-          return <Fragment key={i}>{tokens}</Fragment>;
+          return <Fragment key={i}>{renderMarkdownPart(p, i)}</Fragment>;
         }
         return (
           <button
@@ -36,6 +58,6 @@ export function RichText({ parts, onCite }) {
           </button>
         );
       })}
-    </p>
+    </div>
   );
 }
