@@ -27,7 +27,8 @@ gazelle/
 ├── gaz-server/   # FastAPI backend (shipping)
 ├── web-ui/       # FROZEN — original CDN-prototype design artifact, read-only
 ├── plan/         # PRDs, TRDs, implementation plans (5 pipeline stages)
-└── summary.md    # Living source-of-truth for decisions + status
+└── docs/
+    └── whitepaper.md   # Technical deep-dive: architecture, design rationale, feature selection
 ```
 
 `app/` and `gaz-server/` are independent — separate deps, separate envs, separate deploys. No cross-imports.
@@ -91,7 +92,7 @@ npm run dev
 - **Content gate** — LLM classifier rejects non-educational uploads before chunking.
 - **Citations carry verbatim chunk text** — popover shows source content without an extra retrieval round trip.
 
-Full decision log: [`summary.md`](./summary.md).
+For the full technical deep-dive — architecture, model/provider choices, retrieval strategy, intent routing, and feature scoping rationale — see [`docs/whitepaper.md`](./docs/whitepaper.md).
 
 ## Limitations
 
